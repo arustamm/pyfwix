@@ -19,9 +19,6 @@
 #include "jsonParamObj.h"      // Using the type from your SetUp
 #include "Propagator.h"        // Needed for unique_ptr type (kept for context)
 
-// --- NVTX Header for Profiling Ranges ---
-#include <nvtx3/nvToolsExt.h> // Use nvtx3 namespace if available, else <nvToolsExt.h>
-
 // Simplified coord creation for predictable test data
 void createTestCoords(int n_traces, int n_unique_ids, float x_range, float y_range, float z_val,
     std::vector<float>& cx, std::vector<float>& cy, std::vector<float>& cz, std::vector<int>& c_ids) {
@@ -165,17 +162,10 @@ int main(int argc, char **argv) {
         par, batches); // Pass the vector here
 
     std::cout << "Running forward propagation..." << std::endl;
-
-    // --- Profiling Section using NVTX ---
-    // This marks the region in Nsight Systems / other NVTX-aware profilers
-    nvtxRangePushA("StreamingPropagator::forward"); // Start NVTX range marker (ASCII version)
     
     auto start_cpu_time = std::chrono::steady_clock::now();
     streamer.forward(false, model, data); // Call the method to be profiled
     auto end_cpu_time = std::chrono::steady_clock::now();
-
-    nvtxRangePop(); // End NVTX range marker
-    // --- End Profiling Section ---
 
     std::cout << "Forward propagation finished." << std::endl;
 

@@ -1,7 +1,6 @@
 #include <complex4DReg.h>
 #include "fftw3.h"
 #include <FFT.h>
-#include <benchmark/benchmark.h>
 #include <complex_vector.h>
 #include <cuda_runtime.h>
 #include <chrono>

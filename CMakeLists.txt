@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
-project(FWIX LANGUAGES CXX CUDA)
+cmake_minimum_required(VERSION 3.19)
+project(fwix LANGUAGES C CXX CUDA)
 
 # Common settings
 set(CMAKE_CXX_STANDARD 20)
@@ -7,47 +7,32 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 set(CMAKE_INCLUDE_CURRENT_DIR TRUE)
 
-# Option to use consistent pybind11 version
-# Set default pybind11 version if not already defined
-# Share the common pybind11 instance if requested
-include(FetchContent)
-FetchContent_Declare(
-    pybind11
-    GIT_REPOSITORY https://github.com/pybind/pybind11.git
-    GIT_TAG 75007dda72ad4508064c1f080394eae50d3a61ee
-    UPDATE_DISCONNECTED TRUE
-)
-FetchContent_MakeAvailable(pybind11)
-
 # Find common dependencies once to avoid version conflicts
-find_package(Boost 1.40 COMPONENTS program_options unit_test_framework REQUIRED)
-find_package(CUDAToolkit REQUIRED cufft_static cudart_static)
-find_package(SEPlib REQUIRED)
+find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(Boost REQUIRED)
+include_directories( ${Boost_INCLUDE_DIR} )
+find_package(TBB REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFTW3 REQUIRED fftw3f fftw3)
+
+find_package(CUDAToolkit REQUIRED cufft cudart)
+
+find_package(SEPlib REQUIRED HINTS "$ENV{HOME}/.local/sep-io/cmake/SEP")
+if(SEPlib_FOUND)
+	message("-- Found SEPlib")
+	include_directories(${SEPlib_INCLUDE_DIRS})
+	link_directories(${SEPlib_LIBRARY_DIRS})
+endif(SEPlib_FOUND)
+
 find_package(GTest REQUIRED)
-find_package(OpenCV REQUIRED core)
-find_package(TBB)
-# find compression library
-find_package(SZ3 REQUIRED CONFIG)
-# Get include directories from the SZ3::SZ3 target
-get_target_property(SZ3_INCLUDE_DIRS SZ3::SZ3 INTERFACE_INCLUDE_DIRECTORIES)
+find_package(OpenCV REQUIRED core )
+include_directories( ${OpenCV_INCLUDE_DIRS} )
 
-# Add include directories for all dependencies
-include_directories(
-    ${SEPlib_INCLUDE_DIRS}
-    ${OpenCV_INCLUDE_DIRS}
-    ${TBB_INCLUDE_DIRS}
-    ${SZ3_INCLUDE_DIRS}
-    ${pybind11_INCLUDE_DIR}
-)
-
-# Add link directories for all dependencies
-link_directories(
-    ${SEPlib_LIBRARY_DIRS}
-    ${TBB_LIBRARIES}
-)
-
+find_package(zfp REQUIRED CONFIG)
+message(STATUS "Found ZFP: ${zfp_DIR}")
 
 
 # Build the operator project first since CudaWEM depends on it
 add_subdirectory(operator) 
 add_subdirectory(propagator)
+install(FILES fwix/__init__.py DESTINATION fwix)

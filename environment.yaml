@@ -1,0 +1,47 @@
+name: fwix
+channels:
+  - conda-forge
+  - nvidia/label/cuda-13.0.2
+dependencies:
+  - cuda-toolkit
+  - cuda-nvcc
+  - libopencv
+  - zfp
+
+  - python=3.11
+  - compilers
+  - pybind11==2.10.0
+
+  - make
+  - cmake==3.15
+  - ninja
+  - git
+
+  - boost-cpp
+  - fftw
+  - tbb
+  - tbb-devel
+  - openssl            
+  - flex    
+  - libtirpc           
+
+  - scikit-build-core
+  - pip
+  - patchelf
+
+  - numpy
+  - pytest
+  - scipy
+  - numba
+  - h5py
+  - pyproximal
+
+  - dask=2025.1.0
+  - dask-jobqueue=0.9.0
+  - distributed==2025.1.0
+  - dask-labextension
+
+  - holoviews
+  - jupyterlab
+  - jupyterlab-nvdashboard
+

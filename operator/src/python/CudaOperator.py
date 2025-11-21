@@ -1,4 +1,4 @@
-import pyCudaOperator
+from . import pyCudaOperator
 import pyOperator as Op
 import genericIO
 import numpy as np

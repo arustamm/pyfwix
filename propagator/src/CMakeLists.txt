@@ -70,7 +70,7 @@ target_link_libraries(CudaWEM
 						CudaOperator
 						genericCpp sepVector hypercube
 						jsonCpp sep3d sep
-					  CUDA::cudart_static CUDA::cufft_static
+					  CUDA::cudart CUDA::cufft zfp::zfp
 						${OpenCV_LIBS} tbb
 						)
 

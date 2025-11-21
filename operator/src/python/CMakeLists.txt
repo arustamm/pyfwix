@@ -20,7 +20,7 @@ pybind11_add_module(pyCudaOperator MODULE pyCudaOperator.cpp)
 target_link_libraries(pyCudaOperator PRIVATE CudaOperator)
 
 #install the libraries
-install(TARGETS pyCudaOperator DESTINATION lib/python)
+install(TARGETS pyCudaOperator DESTINATION fwix)
 
 #We will wrap the python/C++ interface with a strict python
-install(FILES CudaOperator.py DESTINATION lib/python)
+install(FILES CudaOperator.py DESTINATION fwix)

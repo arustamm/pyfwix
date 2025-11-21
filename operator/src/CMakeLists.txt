@@ -20,7 +20,7 @@ set_property(TARGET CudaOperator PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(CudaOperator
 						genericCpp sepVector hypercube
 						jsonCpp sep3d sep
-					  CUDA::cudart_static CUDA::cufft_static
+					  CUDA::cudart CUDA::cufft
 						)
 
 install(TARGETS CudaOperator DESTINATION lib)

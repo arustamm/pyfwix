@@ -20,9 +20,6 @@
 #include "Propagator.h"        // Needed for unique_ptr type (kept for context)
 #include "ExtendedBorn.h"      // Assuming this is the class to benchmark
 
-// --- NVTX Header for Profiling Ranges ---
-#include <nvtx3/nvToolsExt.h> // Use nvtx3 namespace if available, else <nvToolsExt.h>
-
 // Simplified coord creation for predictable test data
 void createTestCoords(int n_traces, int n_unique_ids, float x_range, float y_range, float z_val,
     std::vector<float>& cx, std::vector<float>& cy, std::vector<float>& cz, std::vector<int>& c_ids) {
@@ -174,15 +171,10 @@ int main(int argc, char **argv) {
 
     std::cout << "Running forward propagation..." << std::endl;
 
-    // --- Profiling Section using NVTX ---
-    // This marks the region in Nsight Systems / other NVTX-aware profilers
-    nvtxRangePushA("Propagator::forward"); // Start NVTX range marker (ASCII version)
     
     auto start_cpu_time = std::chrono::steady_clock::now();
     prop->forward(false, model, data); // Call the method to be profiled
     auto end_cpu_time = std::chrono::steady_clock::now();
-
-    nvtxRangePop(); // End NVTX range marker
     // --- End Profiling Section ---
 
     std::cout << "Forward propagation finished." << std::endl;
@@ -201,17 +193,10 @@ int main(int argc, char **argv) {
     auto born = std::make_shared<ExtendedBorn>(slowHyper, rangeHyper, model, prop);
 
     std::cout << "Running forward Born..." << std::endl;
-
-    // --- Profiling Section using NVTX ---
-    // This marks the region in Nsight Systems / other NVTX-aware profilers
-    nvtxRangePushA("ExtendedBorn::forward"); // Start NVTX range marker (ASCII version)
     
     start_cpu_time = std::chrono::steady_clock::now();
     born->forward(false, dmodel, data); // Call the method to be profiled
     end_cpu_time = std::chrono::steady_clock::now();
-
-    nvtxRangePop(); // End NVTX range marker
-    // --- End Profiling Section ---
 
     std::cout << "Forward Born finished." << std::endl;
 

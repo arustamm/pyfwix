@@ -1,4 +1,4 @@
-import pyCudaWEM
+from . import pyCudaWEM
 import pyOperator as Op
 import genericIO
 import numpy as np

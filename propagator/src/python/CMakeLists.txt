@@ -20,7 +20,7 @@ pybind11_add_module(pyCudaWEM MODULE pyCudaWEM.cpp)
 target_link_libraries(pyCudaWEM PRIVATE CudaWEM)
 
 #install the libraries
-install(TARGETS pyCudaWEM DESTINATION lib/python)
+install(TARGETS pyCudaWEM DESTINATION fwix)
 
 #We will wrap the python/C++ interface with a strict python
-install(FILES CudaWEM.py DESTINATION lib/python)
+install(FILES CudaWEM.py DESTINATION fwix)

@@ -1,0 +1,31 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.8.0",
+    # Don't include pybind11 here - we'll handle it in CMake
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "fwix"
+version = "0.1.0"
+description = "FWIX with operator and propagator modules"
+dependencies = [
+    "numpy",
+    "scipy",
+]
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest", "jupyterlab", "matplotlib", "holoviews"]
+dask = ["dask==2025.1.0", "distributed==2025.1.0", "dask-jobqueue==0.9.0"]
+
+[tool.scikit-build]
+
+wheel.packages = ["fwix"]
+cmake.build-type = "Release"
+cmake.args = [
+    "-DCMAKE_CXX_FLAGS=-O3 -ffast-math -DNDEBUG -DBOOST_DISABLE_ASSERTS -funroll-loops"
+]
+
+[project.scripts]
+fwix-setup = "setup_env:main"

@@ -5,8 +5,6 @@
 set(TEST_SOURCES 
 operator_unit_test.cpp 
 fft_benchmark.cpp 
-fft_parallel_benchmark.cpp 
-cufft_saturation.cpp
 complex_vector_unit_test.cpp
 )
 
@@ -16,8 +14,8 @@ complex_vector_unit_test.cpp
         target_link_libraries(${obj} CudaOperator
 					genericCpp sepVector hypercube
 					jsonCpp sep3d sep
-					CUDA::cudart_static CUDA::cufft_static
-					GTest::gtest_main GTest::gtest benchmark fftw3f fftw3f_threads -lm)
+					CUDA::cudart CUDA::cufft zfp::zfp
+					GTest::gtest_main GTest::gtest fftw3f fftw3f_threads -lm)
         add_test(NAME ${obj} COMMAND ${obj})
     endforeach()
 

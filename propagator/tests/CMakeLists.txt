@@ -4,7 +4,7 @@ include_directories(${TBB_INCLUDE_DIRS})
 
 set(TEST_SOURCES 
 prop_unit_test.cpp 
-pspi_benchmark.cpp
+# pspi_benchmark.cpp
 prop_benchmark.cpp
 stream_unit_test.cpp
 stream_benchmark.cpp
@@ -18,9 +18,9 @@ foreach(src ${TEST_SOURCES})
     add_executable(${obj} ${src})
     target_link_libraries(${obj} CudaWEM CudaOperator
                                 genericCpp sepVector hypercube
-                                CUDA::cudart_static CUDA::cufft_static
+                                CUDA::cudart CUDA::cufft
                                 GTest::gtest_main GTest::gtest
-                                tbb benchmark)
+                                tbb)
     add_test(NAME ${obj} COMMAND ${obj})
 endforeach()
 
