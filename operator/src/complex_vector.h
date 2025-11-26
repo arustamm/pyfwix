@@ -59,6 +59,7 @@ typedef struct complex_vector
     complex_vector* cloneSpace();
 
     void add(complex_vector* vec);
+    void scale(float scale);
 
     complex_vector* make_view(int start, int end);
     complex_vector* make_slice();

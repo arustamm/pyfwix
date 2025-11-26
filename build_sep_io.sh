@@ -4,7 +4,7 @@
 # updating and dynamically patches all CMakeLists.txt files.
 
 # --- Configuration ---
-INSTALL_DIR="${HOME}/.local/sep-io"
+INSTALL_DIR="${HOME}/.local/sep-io-fwix"
 SOURCE_DIR="/tmp/sep-io-build-src"
 PYBIND11_VERSION="v2.13.6"
 

@@ -28,7 +28,7 @@ dim3 grid, dim3 block, cudaStream_t stream)
   cufftXtSetCallback(plan, (void **)&h_storeCallbackPtr, CUFFT_CB_ST_COMPLEX, (void **)&d_SIZE);
 
   temp = make_complex_vector(domain, _grid_, _block_, stream);
-
+  scale = sqrtf(1.f / SIZE);
   cufftSetStream(plan, stream);
 };
 
@@ -39,6 +39,7 @@ void cuFFT2d::cu_forward(bool add, complex_vector* __restrict__ model, complex_v
   CHECK_CUDA_ERROR(cudaMemPrefetchAsync(data, sizeof(complex_vector), cudaCpuDeviceId, _stream_)); 
   cufftExecC2C(plan, model->mat, temp->mat, CUFFT_FORWARD);
   // CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_));
+  // temp->scale(scale);
   data->add(temp);
 };
 
@@ -49,6 +50,7 @@ void cuFFT2d::cu_adjoint(bool add, complex_vector* __restrict__ model, complex_v
   CHECK_CUDA_ERROR(cudaMemPrefetchAsync(data, sizeof(complex_vector), cudaCpuDeviceId, _stream_)); 
   cufftExecC2C(plan, data->mat, temp->mat, CUFFT_INVERSE);
   // CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_));
+  // temp->scale(scale);
   model->add(temp);
 };
 
@@ -56,11 +58,13 @@ void cuFFT2d::cu_adjoint(bool add, complex_vector* __restrict__ model, complex_v
 void cuFFT2d::cu_forward(__restrict__ complex_vector* data) {
   cufftExecC2C(plan, data->mat, data->mat, CUFFT_FORWARD);
   // CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_));
+  // data->scale(scale);
 };
 
 // this is on-device function
 void cuFFT2d::cu_adjoint(__restrict__ complex_vector* data) {
   cufftExecC2C(plan, data->mat, data->mat, CUFFT_INVERSE);
   // CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_));
+  // data->scale(scale);
 };
 

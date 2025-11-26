@@ -18,9 +18,9 @@ namespace py = pybind11;
 
 using namespace SEP;
 
-PYBIND11_MODULE(pyCudaWEM, clsOps) {
+void init_propagator(py::module_ &m) {
 
-py::class_<StreamingPropagator, std::shared_ptr<StreamingPropagator>>(clsOps, "StreamingPropagator")
+py::class_<StreamingPropagator, std::shared_ptr<StreamingPropagator>>(m, "StreamingPropagator")
 .def(py::init<const std::shared_ptr<hypercube>&,
             const std::shared_ptr<hypercube>&,
             std::shared_ptr<hypercube>,
@@ -41,7 +41,7 @@ py::class_<StreamingPropagator, std::shared_ptr<StreamingPropagator>>(clsOps, "S
     StreamingPropagator::forward,
     "Nonlinear forward operator of StreamingPropagator");
 
-py::class_<Propagator, std::shared_ptr<Propagator>>(clsOps, "Propagator")
+py::class_<Propagator, std::shared_ptr<Propagator>>(m, "Propagator")
     .def(py::init<const std::shared_ptr<hypercube>&,
                 const std::shared_ptr<hypercube>&,
                 std::shared_ptr<hypercube>,
@@ -64,7 +64,7 @@ py::class_<Propagator, std::shared_ptr<Propagator>>(clsOps, "Propagator")
         return self.get_compression_ratio();
     }, "Get compression ratio of Propagator");
 
-py::class_<ExtendedBorn, std::shared_ptr<ExtendedBorn>>(clsOps, "ExtendedBorn")
+py::class_<ExtendedBorn, std::shared_ptr<ExtendedBorn>>(m, "ExtendedBorn")
     .def(py::init<const std::shared_ptr<hypercube>&,
             const std::shared_ptr<hypercube>&,
             std::vector<std::shared_ptr<complex4DReg>>,
@@ -78,7 +78,7 @@ py::class_<ExtendedBorn, std::shared_ptr<ExtendedBorn>>(clsOps, "ExtendedBorn")
         ExtendedBorn::adjoint,
         "Nonlinear adjoint operator of ExtendedBorn");
 
-// py::class_<PhaseShift, std::shared_ptr<PhaseShift>>(clsOps, "PhaseShift")
+// py::class_<PhaseShift, std::shared_ptr<PhaseShift>>(m, "PhaseShift")
 //     .def(py::init<std::shared_ptr<hypercube>, float, float &>(),
 //         "Initialize PhaseShift")
 
@@ -97,7 +97,7 @@ py::class_<ExtendedBorn, std::shared_ptr<ExtendedBorn>>(clsOps, "ExtendedBorn")
 //             self.set_slow(static_cast<std::complex<float> *>(buf.ptr));
 //         });
 
-// py::class_<RefSampler, std::shared_ptr<RefSampler>>(clsOps, "RefSampler")
+// py::class_<RefSampler, std::shared_ptr<RefSampler>>(m, "RefSampler")
 //     .def(py::init<const std::shared_ptr<complex4DReg>&, std::shared_ptr<paramObj>&>(),
 //         "Initialize RefSampler")
 
@@ -115,7 +115,7 @@ py::class_<ExtendedBorn, std::shared_ptr<ExtendedBorn>>(clsOps, "ExtendedBorn")
 //         );
 //     });
 
-py::class_<PSPI, std::shared_ptr<PSPI>>(clsOps, "PSPI")
+py::class_<PSPI, std::shared_ptr<PSPI>>(m, "PSPI")
     .def(py::init<std::shared_ptr<hypercube>&, std::shared_ptr<complex4DReg>, std::shared_ptr<paramObj>>(),
         "Initialize PSPI")
 
@@ -139,7 +139,7 @@ py::class_<PSPI, std::shared_ptr<PSPI>>(clsOps, "PSPI")
         PSPI::set_depth,
         "Set depth of PSPI");
 
-py::class_<NSPS, std::shared_ptr<NSPS>>(clsOps, "NSPS")
+py::class_<NSPS, std::shared_ptr<NSPS>>(m, "NSPS")
     .def(py::init<std::shared_ptr<hypercube>&, std::shared_ptr<complex4DReg>, std::shared_ptr<paramObj>>(),
         "Initialize NSPS")
 
@@ -159,7 +159,7 @@ py::class_<NSPS, std::shared_ptr<NSPS>>(clsOps, "NSPS")
         "Set depth of NSPS");
 
 
-py::class_<Injection, std::shared_ptr<Injection>>(clsOps, "Injection")
+py::class_<Injection, std::shared_ptr<Injection>>(m, "Injection")
     .def(py::init<std::shared_ptr<hypercube>&, std::shared_ptr<hypercube>&, 
         float&, float&,
         const std::vector<float>&, const std::vector<float>&, const std::vector<float>&, const std::vector<int>&>(),
@@ -187,7 +187,7 @@ py::class_<Injection, std::shared_ptr<Injection>>(clsOps, "Injection")
 
     
 
-py::class_<Downward, std::shared_ptr<Downward>>(clsOps, "Downward")
+py::class_<Downward, std::shared_ptr<Downward>>(m, "Downward")
     .def(py::init<std::shared_ptr<hypercube>&, std::shared_ptr<complex4DReg>&, std::shared_ptr<paramObj>&>(),
         "Initialize Downward")
 
@@ -211,7 +211,7 @@ py::class_<Downward, std::shared_ptr<Downward>>(clsOps, "Downward")
         Downward::adjoint,
         "Adjoint operator of Downward");
 
-py::class_<Upward, std::shared_ptr<Upward>>(clsOps, "Upward")
+py::class_<Upward, std::shared_ptr<Upward>>(m, "Upward")
     .def(py::init<std::shared_ptr<hypercube>&, std::shared_ptr<complex4DReg>&, std::shared_ptr<paramObj>&>(),
         "Initialize Upward")
 

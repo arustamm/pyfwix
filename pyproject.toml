@@ -1,7 +1,6 @@
 [build-system]
 requires = [
     "scikit-build-core>=0.8.0",
-    # Don't include pybind11 here - we'll handle it in CMake
 ]
 build-backend = "scikit_build_core.build"
 
@@ -23,9 +22,9 @@ dask = ["dask==2025.1.0", "distributed==2025.1.0", "dask-jobqueue==0.9.0"]
 
 wheel.packages = ["fwix"]
 cmake.build-type = "Release"
-cmake.args = [
-    "-DCMAKE_CXX_FLAGS=-O3 -ffast-math -DNDEBUG -DBOOST_DISABLE_ASSERTS -funroll-loops"
-]
+# cmake.args = [
+#     "-DCMAKE_CXX_FLAGS=-O3 -ffast-math -DNDEBUG -DBOOST_DISABLE_ASSERTS -funroll-loops"
+# ]
 
 [project.scripts]
-fwix-setup = "setup_env:main"
+fwix-setup = "fwix.setup_env:main"

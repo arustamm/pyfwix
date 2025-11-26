@@ -8,7 +8,7 @@ add_subdirectory(src)
 enable_testing()
 
 add_subdirectory(tests)
-add_subdirectory(src/python)
+# add_subdirectory(src/python)
 
 # link_directories(${PROJECT_SOURCE_DIR}/lib)
 # add_subdirectory(test)

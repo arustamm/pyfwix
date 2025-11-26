@@ -1,7 +1,7 @@
 name: fwix
 channels:
   - conda-forge
-  - nvidia/label/cuda-13.0.2
+  - nvidia/label/cuda-12.4.1
 dependencies:
   - cuda-toolkit
   - cuda-nvcc
@@ -10,10 +10,10 @@ dependencies:
 
   - python=3.11
   - compilers
-  - pybind11==2.10.0
+  - pybind11==2.13.6
 
   - make
-  - cmake==3.15
+  - cmake==3.25
   - ninja
   - git
 

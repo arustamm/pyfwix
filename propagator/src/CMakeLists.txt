@@ -36,6 +36,7 @@ ImagingCondition.cpp
 Scattering.cpp
 ExtendedBorn.cpp
 LinReflect.cpp
+python/pyCudaWEM.cpp
 )
 
 set(CPP_INC 
@@ -60,18 +61,15 @@ LinReflect.h
 # add_library(cpp_objects OBJECT ${CPP_SRC} ${CPP_INC})
 # set_property(TARGET cpp_objects PROPERTY CUDA_SEPARABLE_COMPILATION ON)
 include_directories(${TBB_INCLUDE_DIRS})
-add_library(CudaWEM STATIC ${CU_SRC} ${CU_INC} ${CPP_SRC} ${CPP_INC})
+add_library(CudaWEM OBJECT ${CU_SRC} ${CU_INC} ${CPP_SRC} ${CPP_INC})
 
 set_property(TARGET CudaWEM PROPERTY CUDA_SEPARABLE_COMPILATION ON)
-set_property(TARGET CudaWEM PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 set_property(TARGET CudaWEM PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 target_link_libraries(CudaWEM
-						CudaOperator
 						genericCpp sepVector hypercube
 						jsonCpp sep3d sep
-					  CUDA::cudart CUDA::cufft zfp::zfp
+					  	CUDA::cudart_static CUDA::cufft_static zfp::zfp
 						${OpenCV_LIBS} tbb
+						pybind11::module Python::Module
 						)
-
-install(TARGETS CudaWEM DESTINATION lib)

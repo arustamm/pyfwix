@@ -1,8 +1,8 @@
 #pragma once
 #include <cufft.h>
 #include <cufftXt.h>
+#include <fft_callback.cuh>
 #include "CudaOperator.h"
-#include "fft_callback.cuh"
 #include <complex4DReg.h>
 
 using namespace SEP;
@@ -31,6 +31,7 @@ class cuFFT2d : public CudaOperator<complex4DReg, complex4DReg> {
 		int NX, NY, BATCH, SIZE;
 		int* d_SIZE; 
 		complex_vector* temp;
+		float scale;
 		
 
 };

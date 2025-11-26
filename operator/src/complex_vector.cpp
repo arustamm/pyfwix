@@ -53,6 +53,9 @@ complex_vector* complex_vector::cloneSpace() {
 void complex_vector::add(complex_vector* vec){
   launch_add(this, vec, _grid_, _block_, this->stream);
 }
+void complex_vector::scale(float scale){
+  launch_scale(this, scale, _grid_, _block_, this->stream);
+}
 
 complex_vector*  complex_vector::make_view(int start, int end) {
   complex_vector* view;

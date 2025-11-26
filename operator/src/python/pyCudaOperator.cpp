@@ -12,8 +12,8 @@ namespace py = pybind11;
 
 using namespace SEP;
 
-PYBIND11_MODULE(pyCudaOperator, clsOps) {
-  py::class_<cuFFT2d, std::shared_ptr<cuFFT2d>>(clsOps, "cuFFT2d")
+void init_operator(py::module_ &m) {
+      py::class_<cuFFT2d, std::shared_ptr<cuFFT2d>>(m, "cuFFT2d")
       .def(py::init<std::shared_ptr<hypercube>&>(),
           "Initialize cuFFT2d")
 

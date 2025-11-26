@@ -4,4 +4,4 @@ add_subdirectory(src)
 enable_testing()
 add_subdirectory(tests)
 # pybind wrapper
-add_subdirectory(src/python)
+# add_subdirectory(src/python)
