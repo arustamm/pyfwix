@@ -16,8 +16,12 @@ public:
 		tapx = par->getInt("taperx", 0);
 		tapy = par->getInt("tapery", 0);
 
-		_grid_ = {32, 4, 4};
-  	_block_ = {16, 16, 4};
+		// _grid_ = {32, 4, 4};
+		_block_ = {16, 16, 4};
+
+		_grid_.x = (domain->getAxis(1).n + _block_.x - 1) / _block_.x;
+		_grid_.y = (domain->getAxis(2).n + _block_.y - 1) / _block_.y;
+		_grid_.z = (domain->getAxis(3).n*domain->getAxis(4).n + _block_.z - 1) / _block_.z;
 
 		launcher = Taper_launcher(&taper_forward, _grid_, _block_, _stream_);
 

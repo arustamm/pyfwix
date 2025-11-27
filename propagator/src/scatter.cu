@@ -37,19 +37,22 @@ __global__ void mult_kxky(complex_vector* __restrict__ model, complex_vector* __
   int jy = blockDim.y * gridDim.y;
   int jw = blockDim.z * gridDim.z;
 
-  for (int iw = iw0; iw < NW; iw += jw) {
+  int total_batches = NW * NS;
+  
+  for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
+    int iw = batch_idx % NW;
+    int is = batch_idx / NW;
+
     for (int iy = iy0; iy < NY; iy += jy) {
       for (int ix = ix0; ix < NX; ix += jx) {
         
         float k_mag_sq = kx[ix] * kx[ix] + ky[iy] * ky[iy];
         float pow_factor = powf(sqrtf(k_mag_sq) / w[iw], 2 * it);
 
-        for (int is = 0; is < NS; is++) {
-          int nd_ind[] = {is, iw, iy, ix};
-          size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
+        int nd_ind[] = {is, iw, iy, ix};
+        size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
 
-          data->mat[flat_ind] = cuCmulf(model->mat[flat_ind], make_cuFloatComplex(pow_factor, 0.0f));
-        }
+        data->mat[flat_ind] = cuCmulf(model->mat[flat_ind], make_cuFloatComplex(pow_factor, 0.0f));
       }
     }
   }
@@ -73,7 +76,12 @@ __global__ void slow_scale_fwd(complex_vector* __restrict__ model, complex_vecto
   int jy = blockDim.y * gridDim.y;
   int jw = blockDim.z * gridDim.z;
 
-  for (int iw = iw0; iw < NW; iw += jw) {
+  int total_batches = NW * NS;
+  
+  for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
+    int iw = batch_idx % NW;
+    int is = batch_idx / NW;
+
     for (int iy = iy0; iy < NY; iy += jy) {
       for (int ix = ix0; ix < NX; ix += jx) {
         
@@ -88,12 +96,10 @@ __global__ void slow_scale_fwd(complex_vector* __restrict__ model, complex_vecto
         // Compute c = coef[it] * slow^(-0.5-it)
         cuFloatComplex c = cuCmulf(make_cuFloatComplex(coef,0.f), cuCpowf(slow_modified, -0.5f - it));
 
-        for (int is = 0; is < NS; is++) {
-          int nd_ind[] = {is, iw, iy, ix};
-          size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
+        int nd_ind[] = {is, iw, iy, ix};
+        size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
 
-          data->mat[flat_ind] = cuCmulf(c, model->mat[flat_ind]);
-        }
+        data->mat[flat_ind] = cuCmulf(c, model->mat[flat_ind]);
       }
     }
   }
@@ -117,7 +123,12 @@ __global__ void slow_scale_adj(complex_vector* __restrict__ model, complex_vecto
   int jy = blockDim.y * gridDim.y;
   int jw = blockDim.z * gridDim.z;
 
-  for (int iw = iw0; iw < NW; iw += jw) {
+  int total_batches = NW * NS;
+  
+  for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
+    int iw = batch_idx % NW;
+    int is = batch_idx / NW;
+
     for (int iy = iy0; iy < NY; iy += jy) {
       for (int ix = ix0; ix < NX; ix += jx) {
         
@@ -132,12 +143,10 @@ __global__ void slow_scale_adj(complex_vector* __restrict__ model, complex_vecto
         // Compute c = coef[it] * slow^(-0.5-it)
         cuFloatComplex c = cuCmulf(make_cuFloatComplex(coef,0.f), cuCpowf(slow_modified, -0.5f - it));
 
-        for (int is = 0; is < NS; is++) {
-          int nd_ind[] = {is, iw, iy, ix};
-          size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
+        int nd_ind[] = {is, iw, iy, ix};
+        size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
 
-          model->mat[flat_ind] = cuCmulf(cuConjf(c), data->mat[flat_ind]);
-        }
+        model->mat[flat_ind] = cuCmulf(cuConjf(c), data->mat[flat_ind]);
       }
     }
   }
@@ -160,23 +169,26 @@ __global__ void scale_by_iw_fwd(complex_vector* __restrict__ model, complex_vect
   int jy = blockDim.y * gridDim.y;
   int jw = blockDim.z * gridDim.z;
 
-  for (int iw = iw0; iw < NW; iw += jw) {
+  int total_batches = NW * NS;
+  
+  for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
+    int iw = batch_idx % NW;
+    int is = batch_idx / NW;
+
     float factor = - 0.5f * w[iw] * dz;
     
     for (int iy = iy0; iy < NY; iy += jy) {
       for (int ix = ix0; ix < NX; ix += jx) {
         
-        for (int is = 0; is < NS; is++) {
-          int nd_ind[] = {is, iw, iy, ix};
-          size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
+        int nd_ind[] = {is, iw, iy, ix};
+        size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
 
-          cuFloatComplex model_val = model->mat[flat_ind];
-          float re = -factor * cuCimagf(model_val);
-          float im = factor * cuCrealf(model_val);
-          
-          cuFloatComplex increment = make_cuFloatComplex(re, im);
-          data->mat[flat_ind] = cuCaddf(data->mat[flat_ind], increment);
-        }
+        cuFloatComplex model_val = model->mat[flat_ind];
+        float re = -factor * cuCimagf(model_val);
+        float im = factor * cuCrealf(model_val);
+        
+        cuFloatComplex increment = make_cuFloatComplex(re, im);
+        data->mat[flat_ind] = cuCaddf(data->mat[flat_ind], increment);
       }
     }
   }
@@ -199,23 +211,27 @@ __global__ void scale_by_iw_adj(complex_vector* __restrict__ model, complex_vect
   int jy = blockDim.y * gridDim.y;
   int jw = blockDim.z * gridDim.z;
 
-  for (int iw = iw0; iw < NW; iw += jw) {
+  int total_batches = NW * NS;
+  
+  for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
+    int iw = batch_idx % NW;
+    int is = batch_idx / NW;
+
     float factor = 0.5f * w[iw] * dz;
     
     for (int iy = iy0; iy < NY; iy += jy) {
       for (int ix = ix0; ix < NX; ix += jx) {
         
-        for (int is = 0; is < NS; is++) {
-          int nd_ind[] = {is, iw, iy, ix};
-          size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
+        int nd_ind[] = {is, iw, iy, ix};
+        size_t flat_ind = ND_TO_FLAT(nd_ind, dims);
 
-          cuFloatComplex data_val = data->mat[flat_ind];
-          float re = -factor * cuCimagf(data_val);
-          float im = factor * cuCrealf(data_val);
-          
-          cuFloatComplex increment = make_cuFloatComplex(re, im);
-          model->mat[flat_ind] = cuCaddf(model->mat[flat_ind], increment);
-        }
+        cuFloatComplex data_val = data->mat[flat_ind];
+        float re = -factor * cuCimagf(data_val);
+        float im = factor * cuCrealf(data_val);
+        
+        cuFloatComplex increment = make_cuFloatComplex(re, im);
+        model->mat[flat_ind] = cuCaddf(model->mat[flat_ind], increment);
+        
       }
     }
   }

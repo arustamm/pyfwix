@@ -17,12 +17,12 @@ public:
 	// 	_grid_ = {32, 4, 4};
   // _block_ = {16, 16, 4};
 
-	 _block_ = 128;
-  _grid_ = (this->getDomainSize() + _block_.x - 1) / _block_.x;
+	 _block_ = 256;
+  	_grid_ = (this->getDomainSize() + _block_.x - 1) / _block_.x;
 
-		_size_ = domain->getAxis(1).n * domain->getAxis(2).n * domain->getAxis(3).n;
-		CHECK_CUDA_ERROR(cudaMalloc((void **)&d_labels, sizeof(int)*_size_));
-		launcher = Selector_launcher(&select_forward, _grid_, _block_, _stream_);
+	_size_ = domain->getAxis(1).n * domain->getAxis(2).n * domain->getAxis(3).n;
+	CHECK_CUDA_ERROR(cudaMalloc((void **)&d_labels, sizeof(int)*_size_));
+	launcher = Selector_launcher(&select_forward, _grid_, _block_, _stream_);
 	};
 	
 	~Selector() {

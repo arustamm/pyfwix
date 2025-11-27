@@ -13,6 +13,7 @@
 #include "Propagator.h"
 #include "StreamingPropagator.h"
 #include "ExtendedBorn.h"
+#include "StreamingExtendedBorn.h"
 
 namespace py = pybind11;
 
@@ -77,6 +78,19 @@ py::class_<ExtendedBorn, std::shared_ptr<ExtendedBorn>>(m, "ExtendedBorn")
         (void (ExtendedBorn::*)(bool, std::vector<std::shared_ptr<complex4DReg>>&, std::shared_ptr<complex2DReg>&)) &
         ExtendedBorn::adjoint,
         "Nonlinear adjoint operator of ExtendedBorn");
+
+py::class_<StreamingExtendedBorn, std::shared_ptr<StreamingExtendedBorn>>(m, "StreamingExtendedBorn")
+    .def(py::init<std::shared_ptr<StreamingPropagator>,
+            const std::vector<std::shared_ptr<complex4DReg>>&>
+            (), "Initialize Propagator")
+    .def("forward",
+        (void (StreamingExtendedBorn::*)(bool, std::vector<std::shared_ptr<complex4DReg>>&, std::shared_ptr<complex2DReg>&)) &
+        StreamingExtendedBorn::forward,
+        "Nonlinear forward operator of StreamingExtendedBorn")
+    .def("adjoint",
+        (void (StreamingExtendedBorn::*)(bool, std::vector<std::shared_ptr<complex4DReg>>&, std::shared_ptr<complex2DReg>&)) &
+        StreamingExtendedBorn::adjoint,
+        "Nonlinear adjoint operator of StreamingExtendedBorn");
 
 // py::class_<PhaseShift, std::shared_ptr<PhaseShift>>(m, "PhaseShift")
 //     .def(py::init<std::shared_ptr<hypercube>, float, float &>(),

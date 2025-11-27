@@ -4,10 +4,10 @@ import genericIO
 import numpy as np
 from pyVector import superVector
 
-class StreamingPropagator(Op.Operator):
+class Propagator(Op.Operator):
 	# model here refers to the slowness model
 	# data refers to the recorded traces
-	def __init__(self, model, data, wavelet, par, geometry):
+	def __init__(self, model, data, wavelet, par, geometry, nbatches=(1,1)):
 		self.setDomainRange(model,data)
 		# cpp code needs the hypercube corresponding to the injected source traces
 		self.cppMode = pyFWIX.StreamingPropagator(
@@ -15,25 +15,7 @@ class StreamingPropagator(Op.Operator):
 			model.vecs[0].getHyper().cppMode, wavelet.cppMode,
 			geometry["sx"], geometry["sy"], geometry["sz"], geometry["s_ids"],
 			geometry["rx"], geometry["ry"], geometry["rz"], geometry["r_ids"],
-			par.cppMode, par.pars["nbatches"]
-		)
-
-	def forward(self,add,model,data):
-		mod = [m.cppMode for m in model]
-		self.cppMode.forward(add, mod, data.cppMode)
-
-class Propagator(Op.Operator):
-	# model here refers to the slowness model
-	# data refers to the recorded traces
-	def __init__(self, model, data, wavelet, par, geometry):
-		self.setDomainRange(model,data)
-		# cpp code needs the hypercube corresponding to the injected source traces
-		self.cppMode = pyFWIX.Propagator(
-			wavelet.getHyper().cppMode, data.getHyper().cppMode, 
-			model.vecs[0].getHyper().cppMode, wavelet.cppMode,
-			geometry["sx"], geometry["sy"], geometry["sz"], geometry["s_ids"],
-			geometry["rx"], geometry["ry"], geometry["rz"], geometry["r_ids"],
-			par.cppMode
+			par.cppMode, nbatches
 		)
 
 	def forward(self,add,model,data):
@@ -54,10 +36,7 @@ class ExtendedBorn(Op.Operator):
 		self.setDomainRange(model,data)
 		mod = [m.cppMode for m in slow_den]
 		# cpp code needs the hypercube corresponding to the injected source traces
-		self.cppMode = pyFWIX.ExtendedBorn(
-			model[0].getHyper().cppMode, data.getHyper().cppMode, 
-			mod, propagator.cppMode
-		)
+		self.cppMode = pyFWIX.StreamingExtendedBorn(propagator.cppMode, mod)
 
 	def forward(self,add,model,data):
 		if not add: data.zero()

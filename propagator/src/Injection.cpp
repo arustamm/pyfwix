@@ -10,8 +10,10 @@ Injection::Injection(const std::shared_ptr<hypercube>& domain,const std::shared_
   this->oz = oz;
   this->dz = dz;
   
-  _grid_ = {32, 16};
-  _block_ = {32, 16};
+  // _grid_ = {32, 16};
+  _block_ = {16, 16};
+  _grid_.x = (domain->getAxis(1).n + _block_.x - 1) / _block_.x;
+  _grid_.y = (domain->getAxis(2).n + _block_.y - 1) / _block_.y;
 
   launcher = Injection_launcher(&inj_forward, &inj_adjoint, _grid_, _block_, _stream_);
   

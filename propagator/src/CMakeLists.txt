@@ -36,6 +36,8 @@ ImagingCondition.cpp
 Scattering.cpp
 ExtendedBorn.cpp
 LinReflect.cpp
+StreamingExtendedBorn.cpp
+
 python/pyCudaWEM.cpp
 )
 
@@ -57,6 +59,7 @@ ImagingCondition.h
 Scattering.h
 ExtendedBorn.h
 LinReflect.h
+StreamingExtendedBorn.h
 )
 # add_library(cpp_objects OBJECT ${CPP_SRC} ${CPP_INC})
 # set_property(TARGET cpp_objects PROPERTY CUDA_SEPARABLE_COMPILATION ON)

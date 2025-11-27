@@ -66,8 +66,8 @@ CudaOperator<complex2DReg, complex2DReg>(domain, range, model, data, grid, block
 	
 	// Create a unique tag for this entire run. A simple approach is
     // to combine the first shot ID and the frequency range.≈
-	float fmin = ax[3].o;
-	float fmax = ax[3].o + (ax[3].n - 1) * ax[3].d;
+	float fmin = ax[2].o;
+	float fmax = ax[2].o + (ax[2].n - 1) * ax[2].d;
     std::stringstream tag_ss;
     tag_ss << "shot" << min_id << "-" << max_id 
            << "_freq" << std::fixed << std::setprecision(2) << fmin << "-" << fmax;

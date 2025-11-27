@@ -7,11 +7,13 @@ PhaseShift::PhaseShift(const std::shared_ptr<hypercube>& domain, float dz, float
 complex_vector* model, complex_vector* data, dim3 grid, dim3 block, cudaStream_t stream) 
 : CudaOperator<complex4DReg, complex4DReg>(domain, domain, model, data, grid, block, stream), _dz_(dz), _eps_(eps) {
 
-  _grid_ = {32, 4, 4};
+  // _grid_ = {32, 4, 4};
   _block_ = {16, 16, 4};
 
   // _block_ = 256;
-  // _grid_ = (this->getDomainSize() + _block_.x - 1) / _block_.x;
+  _grid_.x = (domain->getAxis(1).n + _block_.x - 1) / _block_.x;
+  _grid_.y = (domain->getAxis(2).n + _block_.y - 1) / _block_.y;
+  _grid_.z = (domain->getAxis(3).n*domain->getAxis(4).n + _block_.z - 1) / _block_.z;
 
   launcher = PS_launcher(&ps_forward, &ps_adjoint, _grid_, _block_, _stream_);
   launcher_inv = PS_launcher(&ps_forward, &ps_inverse, _grid_, _block_, _stream_); 

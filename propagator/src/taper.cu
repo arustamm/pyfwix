@@ -21,8 +21,12 @@ __global__ void taper_forward(complex_vector* __restrict__ model, complex_vector
   int jy = blockDim.y * gridDim.y;
   int jw = blockDim.z * gridDim.z;
 
-  for (int is=0; is < NS; ++is) {
-  for (int iw=iw0; iw < NW; iw += jw) {
+  int total_batches = NW * NS;
+  
+  for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
+    int iw = batch_idx % NW;
+    int is = batch_idx / NW;
+
     for (int iy=iy0; iy < NY; iy += jy) {
       for (int ix=ix0; ix < NX; ix += jx) {
 
@@ -70,5 +74,4 @@ __global__ void taper_forward(complex_vector* __restrict__ model, complex_vector
       }
       }
     }
-  }
 };

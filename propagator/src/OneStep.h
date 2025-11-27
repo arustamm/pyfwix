@@ -61,15 +61,10 @@ protected:
 private:
 
   void initialize(std::shared_ptr<hypercube> domain, std::shared_ptr<hypercube> slow_hyper, std::shared_ptr<paramObj> par) {
-    
-    _block_ = 1024;
-    _grid_ = (domain->getN123() + _block_.x - 1) / _block_.x;
-    
     _nref_ = par->getInt("nref",1);
     taper = std::make_unique<Taper>(domain, par, model_vec, data_vec, _grid_, _block_, _stream_);
     ps = std::make_unique<PhaseShift>(domain, slow_hyper->getAxis(4).d, par->getFloat("eps",0.), model_vec, data_vec, _grid_, _block_, _stream_);
     _wfld_ref = model_vec->cloneSpace();
-    _wfld_ref->set_grid_block(_grid_, _block_);
     model_k = model_vec->cloneSpace();
   
     fft2d = std::make_unique<cuFFT2d>(domain, model_vec, data_vec, _grid_, _block_, _stream_);

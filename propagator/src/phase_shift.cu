@@ -23,7 +23,12 @@ __global__ void ps_forward(complex_vector* __restrict__ model, complex_vector* _
   int jy = blockDim.y * gridDim.y;
   int jw = blockDim.z * gridDim.z;
 
-  for (int iw=iw0; iw < NW; iw += jw) {
+  int total_batches = NW * NS;
+
+  for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
+    int iw = batch_idx % NW;
+    int is = batch_idx / NW;
+
     float sre = cuCrealf(slow_ref[iw]);
     float sim = cuCimagf(slow_ref[iw]);
     for (int iy=iy0; iy < NY; iy += jy) {
@@ -40,19 +45,16 @@ __global__ void ps_forward(complex_vector* __restrict__ model, complex_vector* _
         float sinn;
         sincos(re*dz, &sinn, &coss);
 
-        for (int is=0; is < NS; is++) {
+        int nd_ind[] = {is, iw, iy, ix};
+        flat_ind = ND_TO_FLAT(nd_ind, dims);
 
-          int nd_ind[] = {is, iw, iy, ix};
-          flat_ind = ND_TO_FLAT(nd_ind, dims);
+        float mre = cuCrealf(model->mat[flat_ind]);
+        float mim = cuCimagf(model->mat[flat_ind]);
 
-          float mre = cuCrealf(model->mat[flat_ind]);
-          float mim = cuCimagf(model->mat[flat_ind]);
+        re = att * (mre * coss + mim * sinn);
+        im = att * (-mre * sinn + mim * coss);
 
-          re = att * (mre * coss + mim * sinn);
-          im = att * (-mre * sinn + mim * coss);
-
-          data->mat[flat_ind] = cuCaddf(data->mat[flat_ind], make_cuFloatComplex(re, im)); 
-        }
+        data->mat[flat_ind] = cuCaddf(data->mat[flat_ind], make_cuFloatComplex(re, im)); 
       }
     }
   }
@@ -138,7 +140,12 @@ __global__ void ps_adjoint(complex_vector* __restrict__ model, complex_vector* _
   int jy = blockDim.y * gridDim.y;
   int jw = blockDim.z * gridDim.z;
 
-  for (int iw=iw0; iw < NW; iw += jw) {
+  int total_batches = NW * NS;
+  
+  for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
+    int iw = batch_idx % NW;
+    int is = batch_idx / NW;
+
     float sre = cuCrealf(slow_ref[iw]);
     float sim = cuCimagf(slow_ref[iw]);
     for (int iy=iy0; iy < NY; iy += jy) {
@@ -160,19 +167,17 @@ __global__ void ps_adjoint(complex_vector* __restrict__ model, complex_vector* _
         float sinn;
         sincos(re*dz, &sinn, &coss);
         
-        for (int is=0; is < NS; is++) {
           // convert 4d index to flat index
-          int nd_ind[] = {is, iw, iy, ix};
-          flat_ind = ND_TO_FLAT(nd_ind, dims);
+        int nd_ind[] = {is, iw, iy, ix};
+        flat_ind = ND_TO_FLAT(nd_ind, dims);
 
-          float dre = cuCrealf(data->mat[flat_ind]);
-          float dim = cuCimagf(data->mat[flat_ind]);
+        float dre = cuCrealf(data->mat[flat_ind]);
+        float dim = cuCimagf(data->mat[flat_ind]);
 
-          re = att * (dre * coss - dim * sinn);
-          im = att * (dre * sinn + dim * coss);
+        re = att * (dre * coss - dim * sinn);
+        im = att * (dre * sinn + dim * coss);
 
-          model->mat[flat_ind] = cuCaddf(model->mat[flat_ind], make_cuFloatComplex(re, im));
-        }
+        model->mat[flat_ind] = cuCaddf(model->mat[flat_ind], make_cuFloatComplex(re, im));
       }
     }
   }

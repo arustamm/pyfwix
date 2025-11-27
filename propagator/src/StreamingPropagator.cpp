@@ -38,6 +38,7 @@ StreamingPropagator::StreamingPropagator(
     // Store batch information
     nsrc_batches = num_batches[0];
     nfreq_batches = num_batches[1];
+
     int total_freq = domain->getAxis(1).n; 
     if (total_freq < nfreq_batches) {
       std::cerr << "WARNING: Number of frequencies (" << total_freq << ") is less than the number of batches (" << nfreq_batches << "). Reducing number of batches..." << std::endl;
@@ -208,7 +209,7 @@ void StreamingPropagator::createPropagators(
       data_batches.push_back(std::make_shared<complex2DReg>(batch_range));
       
       // Create propagator
-      propagators[prop_idx] = std::make_unique<Propagator>(
+      propagators[prop_idx] = std::make_shared<Propagator>(
           batch_domain,
           batch_range,
           batch_slow_hyper,
@@ -276,7 +277,7 @@ std::shared_ptr<hypercube> StreamingPropagator::createSubSlowness(
   axes[1].n = window_ny;
   axes[1].o = original->getAxis(2).o + min_iy * original->getAxis(2).d;
   
-  // Ad2ust frequency axis
+  // Adjust frequency axis
   axes[2].n = freq_batch_size;
   axes[2].o = original->getAxis(3).o + start_freq * original->getAxis(3).d;
   
@@ -440,7 +441,7 @@ void StreamingPropagator::forward(bool add, std::vector<std::shared_ptr<complex4
       for (int i = r.begin(); i != r.end(); ++i) {
         // Create windowed models
         windowModel(model, model_batches[i], minx[i], miny[i], start_freqs[i]);
-        propagators[i]->forward(true, model_batches[i], data_batches[i]);
+        propagators[i]->forward(false, model_batches[i], data_batches[i]);
 
         int src_batch = i / nfreq_batches;
         int freq_batch = i % nfreq_batches;

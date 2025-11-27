@@ -44,9 +44,9 @@ int main(int argc, char **argv) {
     // --- Command Line Argument Parsing for Batch Sizes ---
     std::vector<int> batches;
     std::vector<int> default_batches = {1, 1}; // Default values if not provided
-    batches.push_back(1);
     int look_ahead = 1;
-
+    batches.push_back(1);
+    
     if (argc == 1) {
         batches = default_batches;
         std::cout << "Using default batch sizes: [" << batches[0] << ", " << batches[1] << "]" << std::endl;

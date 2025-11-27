@@ -70,7 +70,7 @@ public:
 
     // Member variables
     // Store individual propagators
-    std::vector<std::unique_ptr<Propagator>> propagators;
+    std::vector<std::shared_ptr<Propagator>> propagators;
 
     // Data dimensions
     int ntraces, nw, nz, ny, nx;

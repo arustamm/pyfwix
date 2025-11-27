@@ -10,7 +10,6 @@ __global__ void select_forward(complex_vector* __restrict__ model, complex_vecto
   const int NY = model->n[1];
   const int NW = model->n[2];
   const int NS = model->n[3];
-  const int dims[] = {NS, NW, NY, NX};
   
   // Calculate linear thread ID in the grid
   const int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -25,7 +24,6 @@ __global__ void select_forward(complex_vector* __restrict__ model, complex_vecto
     int ix = idx % NX;
     int iy = (idx / NX) % NY;
     int iw = (idx / (NX * NY)) % NW;
-    int is = idx / (NX * NY * NW);
     size_t i = ix + (iy + iw*NY)*NX;
           
     if (labels[i] == value) {
