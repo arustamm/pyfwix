@@ -28,6 +28,8 @@ dependencies:
   - scikit-build-core
   - pip
   - patchelf
+  - pip:
+      - git+https://github.com/arustamm/pysep3d.git@main  # TODO add the version tag when stable
 
   - numpy
   - pytest

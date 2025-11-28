@@ -14,6 +14,7 @@ except (ImportError, PackageNotFoundError):
 # If these fail, we WANT them to crash immediately so Dask reports the error.
 from . import CudaOperator
 from . import CudaWEM
+from . import FWIXmodeling
 
 # 4. Define Public API
-__all__ = ["CudaOperator", "CudaWEM"]
+__all__ = ["CudaOperator", "CudaWEM", "FWIXmodeling"]
