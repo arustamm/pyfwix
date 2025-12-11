@@ -15,6 +15,10 @@ except (ImportError, PackageNotFoundError):
 from . import CudaOperator
 from . import CudaWEM
 from . import FWIXmodeling
+from . import FWIXProblem
+from . import utils
+from . import workers
+from . import sep3d
 
 # 4. Define Public API
-__all__ = ["CudaOperator", "CudaWEM", "FWIXmodeling"]
+__all__ = ["CudaOperator", "CudaWEM", "FWIXmodeling", "FWIXProblem", "utils", "workers", "sep3d"]

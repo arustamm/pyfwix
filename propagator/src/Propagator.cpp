@@ -29,24 +29,47 @@ CudaOperator<complex2DReg, complex2DReg>(domain, range, model, data, grid, block
 	int min_id = *std::min_element(s_ids.begin(), s_ids.end());
 	int max_id = *std::max_element(s_ids.begin(), s_ids.end());
 
-	// Create new vectors with shifted IDs using std::transform
-	std::vector<int> shifted_s_ids(s_ids.size());
-	std::transform(s_ids.begin(), s_ids.end(), shifted_s_ids.begin(), 
-								[min_id](int id) { return id - min_id; });
-	
-	std::vector<int> shifted_r_ids(r_ids.size());
-	std::transform(r_ids.begin(), r_ids.end(), shifted_r_ids.begin(), 
-								[min_id](int id) { return id - min_id; });
-	
-	// Find the maximum ID to calculate nshot
-	int max_shifted_id = *std::max_element(shifted_s_ids.begin(), shifted_s_ids.end());
-	int nshot = max_shifted_id + 1; // since IDs start at 0
+	// Identify unique source IDs and sort them to ensure deterministic mapping
+    std::vector<int> unique_ids = s_ids;
+    std::sort(unique_ids.begin(), unique_ids.end());
+    auto last = std::unique(unique_ids.begin(), unique_ids.end());
+    unique_ids.erase(last, unique_ids.end());
+
+    // Build a lookup map: Original ID -> Dense Index
+    std::map<int, int> id_map;
+    for (size_t i = 0; i < unique_ids.size(); ++i) 
+        id_map[unique_ids[i]] = i;
+
+    // Remap Source IDs (e.g., [10, 21, 31] -> [0, 1, 2])
+    std::vector<int> shifted_s_ids(s_ids.size());
+    for (size_t i = 0; i < s_ids.size(); ++i) 
+        shifted_s_ids[i] = id_map[s_ids[i]];
+
+    // Remap Receiver IDs using the SAME map
+    //    (e.g., [10, 10, 21, 21...] -> [0, 0, 1, 1...])
+    std::vector<int> shifted_r_ids(r_ids.size());
+    for (size_t i = 0; i < r_ids.size(); ++i) {
+        if (id_map.find(r_ids[i]) == id_map.end()) {
+             throw std::runtime_error("Error: Found a receiver associated with a Shot ID not present in the source list.");
+        }
+        shifted_r_ids[i] = id_map[r_ids[i]];
+    }
+
+    // Calculate nshot based on the count of unique sources
+    int nshot = unique_ids.size();
 
 	ax = slow_hyper->getAxes();
 	// take care of padding 
-	ax[0].n += par->getInt("padx", 0);
-	ax[1].n += par->getInt("pady", 0);
-
+	int padx = par->getInt("padx", -1);
+	int pady = par->getInt("pady", -1);
+	if (padx >= 0) {
+		ax[0].n += padx;
+		ax[1].n += pady;
+	}
+	else {
+		throw std::runtime_error("Error: negative padx/pady values");
+	}
+		
 	wfld_hyper = std::make_shared<hypercube>(ax[0], ax[1], ax[2], nshot);
 
 	// inj_src will allocate data_vec(wavefield) on GPU

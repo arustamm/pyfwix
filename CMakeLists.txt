@@ -57,8 +57,15 @@ target_link_libraries(pyFWIX PRIVATE
     ${OpenCV_LIBS} tbb
     pybind11::module Python::Module
 )
+
+set (PY_INSTALL 
+fwix/__init__.py 
+fwix/CudaOperator.py 
+fwix/CudaWEM.py 
+fwix/FWIXmodeling.py 
+fwix/FWIXProblem.py 
+fwix/utils.py 
+)
+
 install(TARGETS pyFWIX DESTINATION fwix)
-install(FILES fwix/__init__.py DESTINATION fwix)
-install(FILES fwix/CudaOperator.py DESTINATION fwix)
-install(FILES fwix/CudaWEM.py DESTINATION fwix)
-install(FILES fwix/FWIXmodeling.py DESTINATION fwix)
+install(FILES ${PY_INSTALL} DESTINATION fwix)

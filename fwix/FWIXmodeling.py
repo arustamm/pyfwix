@@ -8,6 +8,7 @@ import pyarrow as pa
 import gc
 from fwix import CudaWEM
 import Hypercube
+from fwix.utils import create_geometry, create_wavelet, create_data, get_axis
 
 class FWIXmodeling(ReaderStep):
     def __init__(self, 
@@ -17,7 +18,16 @@ class FWIXmodeling(ReaderStep):
                 geometry: Dict[str, Any], 
                 partition_size: int,   # Dask: Number of shots per Dask partition
                 shots_per_gpu: int = 1, # GPU: Number of shots per C++ batch
-                gpu_stream_batches: Tuple[int] = (1, 1)
+                gpu_stream_batches: Tuple[int] = (1, 1),
+                geometry_mapping: Dict[str, str] = {
+					"sx": "sx",
+					"sy": "sy",
+					"sz": "sz",
+                    "id": "uniqueshots",
+					"rx": "rx",
+					"ry": "ry",
+					"rz": "rz",
+				}	
             ):
         
         super().__init__(path="")
@@ -27,23 +37,28 @@ class FWIXmodeling(ReaderStep):
         self.partition_size = partition_size
         self.shots_per_gpu = shots_per_gpu
         self.model = model
-        self.wavelet = wavelet
+        
         self.par = par
+        self.geometry_mapping = geometry_mapping
 
         # This creates a DataFrame with N_shots * N_receivers rows
         pdf = self._create_trace_headers(geometry)
-        
-        if not pdf['uniqueshots'].is_monotonic_increasing:
-            pdf = pdf.sort_values('uniqueshots')
+        shot_col = 'uniqueshots'
+
+        if not pdf[shot_col].is_monotonic_increasing:
+            pdf = pdf.sort_values(shot_col)
+        if not wavelet[shot_col].is_monotonic_increasing:
+            wavelet = wavelet.sort_values(shot_col)
             
-        pdf = pdf.set_index('uniqueshots')
+        wavelet = wavelet.set_index(shot_col)
 
         # partition based on Unique Shots to ensure a shot isn't split across files
-        n_unique_shots = len(pdf.index.unique())
+        n_unique_shots = len(pdf[shot_col].unique())
         npartitions = int(np.ceil(n_unique_shots / self.partition_size))
         
         self.df = dd.from_pandas(pdf, npartitions=npartitions)
-
+        self.wavelet = wavelet
+        
         self.meta = pdf.iloc[:0].copy()
         self.meta['data'] = pd.Series(dtype=object)
 
@@ -87,8 +102,9 @@ class FWIXmodeling(ReaderStep):
             self.model,
             self.wavelet,
             self.par,
-            self.gpu_stream_batches,
             self.shots_per_gpu,
+            self.gpu_stream_batches,
+            self.geometry_mapping,
             meta=self.meta
         )
         return simulated_ddf.reset_index()
@@ -99,13 +115,15 @@ def _simulate_partition(
     model, 
     wavelet: pd.DataFrame,
     par,
+    shots_per_gpu: int, # Limit for Micro-batching
     gpu_stream_batches: tuple,
-    shots_per_gpu: int # Limit for Micro-batching
+    geom_mapping: Dict[str, str]
 ) -> pd.DataFrame:
     
-    unique_shots = df.index.unique()
+    shot_col = geom_mapping['id']
+    unique_shots = df[shot_col].unique()
     # Prepare list to hold results
-    all_data_arrays = [None] * len(df)
+    data_list = [None] * len(df)
     
     current_row_offset = 0
     
@@ -113,38 +131,16 @@ def _simulate_partition(
     for i in range(0, len(unique_shots), shots_per_gpu):
         
         batch_ids = unique_shots[i : i + shots_per_gpu]
-        df_batch = df.loc[batch_ids]
+        df_batch = df[df[shot_col].isin(batch_ids)]
         ntraces_batch = len(df_batch)
 
         wav_df = wavelet.loc[batch_ids]
         
-        rx = df_batch['rx'].values.astype(np.float32)
-        ry = df_batch['ry'].values.astype(np.float32)
-        rz = df_batch['rz'].values.astype(np.float32)
-        r_ids = df_batch.index.values.astype(np.int32)
-
-        df_shots_unique = df_batch[~df_batch.index.duplicated(keep='first')]
+        geometry = create_geometry(df_batch, geom_mapping)
         
-        sx = df_shots_unique['sx'].values.astype(np.float32)
-        sy = df_shots_unique['sy'].values.astype(np.float32)
-        sz = df_shots_unique['sz'].values.astype(np.float32)
-        s_ids = df_shots_unique.index.values.astype(np.int32) # Unique Shot IDs
-
-        geometry = {
-            "sx": sx, "sy": sy, "sz": sz, "s_ids": s_ids,   # Size: N_shots
-            "rx": rx, "ry": ry, "rz": rz, "r_ids": r_ids    # Size: N_traces
-        }
-
-        first_wav = wav_df.iloc[0]['data']
-        ax = first_wav.getHyper().axes[0]
-        data_hyper = Hypercube.hypercube(ns=[ax.n, ntraces_batch], ds=[ax.d, 1], os=[ax.o, 0])
-        data = SepVector.getSepVector(data_hyper, storage='dataComplex')
-
-        wav_vec = SepVector.getSepVector(ns=[
-            ax.n, len(batch_ids)], ds=[ax.d, 1], os=[ax.o, 0], storage='dataComplex')
-        
-        for i in range(len(batch_ids)):
-            wav_vec[i, :] = wav_df.iloc[i]['data'][:]
+        time_axis = get_axis(wav_df)
+        wav_vec = create_wavelet(wav_df, time_axis)
+        data = create_data(df_batch, time_axis)
 
         prop = None
         try:
@@ -154,7 +150,7 @@ def _simulate_partition(
             )
             prop.forward(False, model, data)
             
-            all_data_arrays[current_row_offset:current_row_offset+ntraces_batch] = list(data[:].copy())              
+            data_list[current_row_offset:current_row_offset+ntraces_batch] = list(data[:].copy())              
             current_row_offset += ntraces_batch
 
         finally:
@@ -163,6 +159,6 @@ def _simulate_partition(
 
     # Create a copy to return (Dask requires this to avoid side effects)
     res_df = df.copy()
-    res_df['data'] = all_data_arrays
+    res_df['data'] = data_list
     
     return res_df

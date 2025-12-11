@@ -13,14 +13,16 @@ using namespace SEP;
 using namespace std::placeholders;
 
 RefSampler::RefSampler(std::shared_ptr<hypercube> slow_hyper, std::shared_ptr<paramObj> par) {
-	padx = static_cast<size_t>(par->getInt("padx", 0));
-	pady = static_cast<size_t>(par->getInt("pady", 0));
-
 	_nref_ = static_cast<size_t>(par->getInt("nref"));
 	_nx_ = static_cast<size_t>(slow_hyper->getAxis(1).n);
 	_ny_ = static_cast<size_t>(slow_hyper->getAxis(2).n);
 	_nw_ = static_cast<size_t>(slow_hyper->getAxis(3).n);
 	_nz_ = static_cast<size_t>(slow_hyper->getAxis(4).n);
+
+	padx = par->getInt("padx", 0);
+	pady = par->getInt("pady", 0);
+	if (padx < 0 || pady < 0) 
+		throw std::runtime_error("RefSampler: padx and pady must be >= 0");		
 
 	ref_labels.resize(boost::extents[_nz_][_nw_][_ny_ + pady][_nx_ + padx]);
 	slow_ref.resize(boost::extents[_nz_][_nref_][_nw_]);

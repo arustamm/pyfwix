@@ -8,7 +8,7 @@
 REPO="https://github.com/arustamm/pythonSolver.git"
 BRANCH="rustam/constrained"
 # This MUST match the installation directory from the build_sep_io.sh script.
-INSTALL_DIR="${HOME}/.local/sep-io-fwix//lib/python3.11"
+INSTALL_DIR="${HOME}/.local/sep-io-fwix/lib/python3.11"
 # Temporary directory to clone and build the solver.
 SOLVER_SRC_DIR="/tmp/python-solver-src"
 
