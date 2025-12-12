@@ -14,8 +14,8 @@
 class WavefieldPool {
 public:
     WavefieldPool(std::shared_ptr<hypercube> wfld_hyper, 
-                std::shared_ptr<paramObj> par, std::string run_id) {
-        initialize(wfld_hyper, par, run_id);
+                std::shared_ptr<paramObj> par, std::string run_id, int max_depth) {
+        initialize(wfld_hyper, par, run_id, max_depth);
     }
 
     ~WavefieldPool() {
@@ -39,10 +39,11 @@ public:
     void clear_pipeline();
 
 private:
-    void initialize(std::shared_ptr<hypercube> wfld_hyper, std::shared_ptr<paramObj> par, std::string run_id);
+    void initialize(std::shared_ptr<hypercube> wfld_hyper, std::shared_ptr<paramObj> par, std::string run_id, int max_depth);
     void cleanup();
     
     std::future<void> compress_slice_impl(int iz, int pool_idx, cudaEvent_t event, std::string& tag);
+    int get_or_open_fd(const std::string& tag);
 
     // Resources
     size_t _slice_size_bytes;
@@ -50,7 +51,16 @@ private:
     std::vector<cudaEvent_t> events_pool;
     std::vector<zfp_stream*> zfp_stream_pool;
     std::vector<zfp_field*> zfp_field_pool;
-    double error_bound;
+    double compress_rate;
+    
+    int _fd = -1;
+    int _max_depth = 0;
+    size_t _chunk_size = 0;
+    std::map<std::string, int> _fd_map;
+    std::mutex _io_mutex; // Protects the map opening
+    
+    std::vector<std::vector<char>> _compressed_buffer_pool; 
+    std::vector<std::vector<char>> _decomp_buffer_pool;
 
     // Add dedicated decompression resources
     std::vector<std::shared_ptr<complex4DReg>> _decomp_wfld_pool;
@@ -70,6 +80,14 @@ private:
     std::queue<int> _decomp_free_indices_queue;
     std::mutex _decomp_pool_mutex;
     std::condition_variable _decomp_pool_cv;
+
+    std::queue<int> _comp_free_indices_queue;
+    std::mutex _comp_pool_mutex;
+    std::condition_variable _comp_pool_cv;
+    
+    // For tracking ALL in-flight compressions
+    std::queue<std::future<void>> _comp_futures_queue;
+    std::mutex _comp_queue_mutex;
 
     std::string _base_path;
     std::atomic<size_t> _total_compressed_size;

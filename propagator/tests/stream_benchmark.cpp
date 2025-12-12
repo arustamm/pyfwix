@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
     root["ginsu_x"] = 0.0; // Padding in meters
     root["ginsu_y"] = 0.0;
     root["look_ahead"] = look_ahead;
-    root["compress_error"] = 1e-6;
+    root["compress_rate"] = 4;
     root["wflds_to_store"] = 4;
     par = std::make_shared<jsonParamObj>(root); // Assuming constructor exists
 

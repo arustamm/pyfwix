@@ -21,13 +21,14 @@ CudaOperator<complex4DReg, complex2DReg>(domain, range, grid, block, stream) {
 
   _slow = slow_den[0];
   _den = slow_den[1];
+  auto m_ax = _slow->getHyper()->getAxes();
 
   CHECK_CUDA_ERROR(cudaHostRegister(_slow->getVals(), _slow->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
   CHECK_CUDA_ERROR(cudaHostRegister(_den->getVals(), _den->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
 
   auto run_id = propagator->getRunId();
   run_id.insert(0, "extended_born_");
-	auto wfld_pool = std::make_shared<WavefieldPool>(wfld_hyper, par, run_id);
+	auto wfld_pool = std::make_shared<WavefieldPool>(wfld_hyper, par, run_id, m_ax[3].n);
 
   down = std::make_shared<Downward>(wfld_hyper, 
     _slow->getHyper(), par, 
@@ -73,10 +74,7 @@ size_t ExtendedBorn::getSliceSizeInBytes() const {
 }
 
 void ExtendedBorn::set_background_model(std::vector<std::shared_ptr<complex4DReg>> model) {
-	_propagator->set_background_model(model);
-  // down_scattering->set_background_model(model[0]);
-  // up_scattering->set_background_model(model[0]);
-  // back_scattering->set_background_model(model);
+  throw std::runtime_error("set_background_model not implemented for ExtendedBorn");
 }
 
 void ExtendedBorn::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> model, std::shared_ptr<complex2DReg> data) {

@@ -105,7 +105,8 @@ public:
     // 3. Now that we have the result, remove the item from the queue.
     decomp_queue.pop();
 
-    // 4. CRITICAL: Release the buffer back to the pool so it can be reused.
+    // 4. Release the buffer back to the pool so it can be reused.
+    CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_)); // Ensure all operations on the stream are done
     _wfld_pool->release_decomp_buffer(buffer_idx);
 
     // 5. Return the ready-to-use wavefield.
@@ -174,7 +175,7 @@ private:
 
     if (!wfld_pool) {
       std::string id = "wfld";
-      _wfld_pool = std::make_shared<WavefieldPool>(domain, par, id);
+      _wfld_pool = std::make_shared<WavefieldPool>(domain, par, id, m_ax[3].n);
     } else {
       _wfld_pool = wfld_pool;
     }

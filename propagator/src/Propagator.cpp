@@ -96,7 +96,7 @@ CudaOperator<complex2DReg, complex2DReg>(domain, range, model, data, grid, block
            << "_freq" << std::fixed << std::setprecision(2) << fmin << "-" << fmax;
     _run_id = tag_ss.str();
 
-	wfld_pool = std::make_shared<WavefieldPool>(wfld_hyper, par, _run_id);
+	wfld_pool = std::make_shared<WavefieldPool>(wfld_hyper, par, _run_id, ax[3].n);
 
 	// TODO: dont have to allocate temp wavefields twice for up and down, can reuse instead
 	down = std::make_shared<Downward>(wfld_hyper, slow_hyper, par, ref, wfld_pool, "down", inj_src->data_vec, inj_src->data_vec, _grid_, _block_, _stream_);

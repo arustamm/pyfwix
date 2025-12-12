@@ -55,7 +55,6 @@ void Upward::cu_forward(bool add, complex_vector* __restrict__ model, complex_ve
 	// for (batches in z)
 
 	for (int iz=m_ax[3].n; iz > 0; --iz) {
-		_wfld_pool->check_ready();
 		// Enqueue more work!
 		this->one_step_fwd(iz-1, model);
 	}
