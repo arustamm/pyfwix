@@ -124,6 +124,10 @@ def _obj_worker(
 		wav_vec = create_wavelet(wav_batch, time_axis)
 		data = create_data(df_batch, time_axis)
 		res = data.clone()
+		if wav_vec.norm() == 0:
+			raise ValueError("Wavelet vector has zero norm.")
+		if data.norm() == 0:
+			raise ValueError("Data vector has zero norm.")
 
 		local_slow = zarr_to_sepvector(model.vecs[0], slices=slices)
 		local_den = zarr_to_sepvector(model.vecs[1], slices=slices)

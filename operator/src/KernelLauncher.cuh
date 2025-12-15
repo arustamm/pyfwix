@@ -4,16 +4,22 @@
 #include <complex_vector.h>
 #include <cuda.h>
 #include <iostream>
+#include <map>
 
 template <typename... Args>
 class KernelLauncher {
 public:
+  using FwdKernel = void (*)(complex_vector* __restrict__, complex_vector* __restrict__, Args...);
+  using AdjKernel = void (*)(complex_vector* __restrict__, complex_vector* __restrict__, Args...);
+
+
   KernelLauncher();
-  KernelLauncher(void (*fwd_kernel)(complex_vector* __restrict__, complex_vector* __restrict__, Args...), 
-  void (*adj_kernel)(complex_vector* __restrict__, complex_vector* __restrict__, Args...), 
-  dim3 grid, dim3 block, cudaStream_t stream = 0);
-  KernelLauncher(void (*fwd_kernel)(complex_vector* __restrict__, complex_vector* __restrict__, Args...),
-  dim3 grid, dim3 block, cudaStream_t stream = 0);
+  KernelLauncher(FwdKernel fwd_kernel, AdjKernel adj_kernel, 
+                  dim3 grid, dim3 block, cudaStream_t stream);
+  
+  KernelLauncher(FwdKernel fwd_kernel, 
+                  dim3 grid, dim3 block, cudaStream_t stream);
+  
   ~KernelLauncher();
 
   void run_fwd(complex_vector* __restrict__ model, complex_vector* __restrict__ data, Args... args);
@@ -27,7 +33,7 @@ public:
 private:
   dim3 _grid_, _block_;
   cudaStream_t _stream_;
-  void (*_fwd_kernel_)(complex_vector* __restrict__, complex_vector* __restrict__, Args...);
-  void (*_adj_kernel_)(complex_vector* __restrict__, complex_vector* __restrict__, Args...);
+  FwdKernel _fwd_kernel_;
+  AdjKernel _adj_kernel_;
 
 };

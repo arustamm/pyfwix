@@ -11,8 +11,10 @@ ForwardScattering::ForwardScattering(
   dim3 grid, dim3 block, cudaStream_t stream
 ) : CudaOperator<complex3DReg, complex4DReg>(domain, range, model, data, grid, block, stream) {
 	
-	_grid_ = {32, 4, 4};
 	_block_ = {16, 16, 4};
+	_grid_.x = (range->getAxis(1).n + _block_.x - 1) / _block_.x;
+  	_grid_.y = (range->getAxis(2).n + _block_.y - 1) / _block_.y;
+  	_grid_.z = (range->getAxis(3).n*range->getAxis(4).n + _block_.z - 1) / _block_.z;
 	
 	sc_wfld = data_vec->cloneSpace();
 	sc_wfld->set_grid_block(_grid_, _block_);
@@ -69,8 +71,10 @@ BackScattering::BackScattering(
   dim3 grid, dim3 block, cudaStream_t stream
 ) : CudaOperator<complex5DReg, complex4DReg>(domain, range, model, data, grid, block, stream) {
 
-	_grid_ = {32, 4, 4};
 	_block_ = {16, 16, 4};
+	_grid_.x = (range->getAxis(1).n + _block_.x - 1) / _block_.x;
+  	_grid_.y = (range->getAxis(2).n + _block_.y - 1) / _block_.y;
+  	_grid_.z = (range->getAxis(3).n*range->getAxis(4).n + _block_.z - 1) / _block_.z;
 
 	auto ax = domain->getAxes();
 	auto subhyper = std::make_shared<hypercube>(std::vector<axis>{ax[0], ax[1], ax[2]});

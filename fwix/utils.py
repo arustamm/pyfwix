@@ -7,6 +7,8 @@ from pyProblem import Problem  # Assuming base class is in pyProblem.py
 import SepVector
 import Hypercube
 import gc
+import dask.array as da
+import zarr
 
 import pandas as pd
 import numpy as np
@@ -182,35 +184,66 @@ def get_slices(geometry, slowness, pad_x, pad_y):
     
     return slices
 
-def prepare_extended_model(model, nf, of, df, path, pad_z = 0, 
+def prepare_extended_model(model, nf, of, df, path, pad_z=0, 
                            chunks=None, shards=None,
                            remove_file=False, temp_dir='/tmp/') -> ZarrVector:
+    """
+    Fully lazy version - never materializes the full array in memory.
+    """
     if of == 0:
         raise ValueError("Cannot run zero frequency!")
+    
     axes = model.getHyper().axes
     nz, ny, nx = axes[0].n, axes[1].n, axes[2].n
     oz, oy, ox = axes[0].o, axes[1].o, axes[2].o
     dz, dy, dx = axes[0].d, axes[1].d, axes[2].d
     n_pad = int(round(pad_z / dz))
-    model_data = np.pad(
-            model[:], 
-            pad_width=((0, 0), (0, 0), (n_pad, 0)), 
-            mode='constant', 
-            constant_values=1.5
-        ).astype(np.complex64)
     
-    model_ext = ZarrVector(ns_list=[ny, nx, nf, nz + n_pad], 
-                            ds_list=[dy, dx, df, dz], 
-                            os_list=[oy, ox, of, oz], 
-                            dtype=np.complex64, 
-                            chunks=chunks,
-                            shards=shards,
-                            path=path,
-                            temp_dir=temp_dir,
-                            remove_file=remove_file)
-    transpose_model = 1. / np.transpose(model_data[:], (2, 0, 1))**2
-
-    # write to
-    for i in range(nf):
-        model_ext[:, i, :, :] = transpose_model
-    return model_ext
+    if chunks is None:
+        chunks = (min(100, nz + n_pad), min(10, nf), min(100, ny), min(100, nx))
+    
+    # ===== FULLY LAZY PIPELINE =====
+    
+    # 1. Convert model to Dask (lazy - no data read yet)
+    model_dask = da.from_array(model[:], chunks=(nx, ny, nz))
+    
+    # 2. Lazy pad
+    model_padded = da.pad(
+        model_dask,
+        pad_width=((0, 0), (0, 0), (n_pad, 0)),
+        mode='constant',
+        constant_values=1.5
+    )
+    
+    # 3. Lazy transpose: (nz, ny, nx+n_pad) -> (nz+n_pad, ny, nx)
+    transposed = da.transpose(model_padded, (2, 0, 1))
+    
+    # 4. Lazy compute 1/v^2
+    inv_squared = 1.0 / (transposed ** 2)
+    inv_squared = inv_squared.astype(np.complex64)
+    
+    # 5. Add frequency dimension and broadcast
+    # (nz+n_pad, ny, nx) -> (nz+n_pad, ny, nx, 1) -> (nz+n_pad, ny, nx, nf)
+    extended = da.broadcast_to(
+        inv_squared[:, np.newaxis, :, :],
+        shape=(nz + n_pad, nf, nx, ny)
+    )
+    
+    # 7. Rechunk for optimal storage
+    extended = extended.rechunk(chunks)
+    
+    # 8. Execute entire pipeline and write
+    extended.to_zarr(path, overwrite=True, compute=True)
+    
+    # 9. Wrap in ZarrVector
+    za = zarr.open_array(path, mode='r+')
+    za.attrs['ns'] = [ny, nx, nf, nz + n_pad]
+    za.attrs['ds'] = [dy, dx, df, dz]
+    za.attrs['os'] = [oy, ox, of, oz]
+    
+    return ZarrVector(
+        existing_zarr_array=za,
+        path=path,
+        temp_dir=temp_dir,
+        remove_file=remove_file
+    )
