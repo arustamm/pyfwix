@@ -99,6 +99,28 @@ def create_wavelet(wav_df_batch: pd.DataFrame, axis) -> SepVector.vector:
     
     return vec
 
+def slice_sepvector(vec: SepVector, slices):
+    arr = vec[slices] 
+    ax = vec.getHyper().axes
+    ns = [ax[i].n for i in range(len(ax))]
+    os = [ax[i].o for i in range(len(ax))]
+    ds = [ax[i].d for i in range(len(ax))]
+
+    new_ns = list(reversed(arr.shape))
+    new_ds = list(ds)
+    new_os = list(os)
+    
+    ndim = len(vec.shape)
+    for i, sl in enumerate(slices):
+        start = sl.start if isinstance(sl, slice) else sl
+        if start is None: start = 0
+        idx = ndim - 1 - i
+        new_os[idx] = os[idx] + start * ds[idx]
+
+    vec = SepVector.getSepVector(ns=new_ns, os=new_os, ds=new_ds, storage='dataComplex')
+    vec[:] = arr[:]
+    return vec
+
 def zarr_to_sepvector(zvec: ZarrVector, slices=None):
     arr, ns, os, ds = zvec.to_numpy(slices)
     vec = SepVector.getSepVector(ns=ns, os=os, ds=ds, storage='dataComplex')
@@ -150,9 +172,10 @@ def get_slices(geometry, slowness, pad_x, pad_y):
     
     # Clip to model boundaries
     # Assuming origin is 0,0 for simplicity, use slowness.os to be precise
-    ox, oy, of, oz = slowness.os # Assuming [Z, Y, X] order
-    dx, dy, df, dz = slowness.ds
-    nx, ny, nf, nz = slowness.ns
+    axes = slowness.getHyper().axes
+    ox, oy, of, oz = [ax.o for ax in axes]
+    dx, dy, df, dz = [ax.d for ax in axes]
+    nx, ny, nf, nz = [ax.n for ax in axes]
     
     limitx = ox + (nx-1) * dx
     limity = oy + (ny-1) * dy

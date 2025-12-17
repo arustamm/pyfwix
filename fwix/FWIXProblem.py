@@ -2,8 +2,10 @@ import pandas as pd
 import numpy as np
 import dask
 import dask.dataframe as dd
+from dask.distributed import get_client, as_completed, wait
 import gc
 from typing import Tuple, Dict, Any
+from collections import defaultdict
 
 import SepVector
 import Hypercube
@@ -15,14 +17,13 @@ import pyLinearSolver as LinearSolver
 import pyStopper as Stopper
 import pyproximal as pp
 from pyProxOperator import ProxOperatorExplicit, ProxDstack
-from fwix.workers import _obj_grad_worker, _obj_worker, _reduce_vector
+from fwix.workers import _obj_grad_worker, _obj_worker
 
 from fwix import CudaOperator
 
 class FWIXProblem(Prblm.Problem):
 	def __init__(self, 
-				start_model: Vec.vector, 
-				start_density: Vec.vector,
+				start_model: Vec.superVector, 
 				data_pipeline, # pysep3d pipeline object
 				prop_par: Dict[str, Any],
 				wavelet: pd.DataFrame,
@@ -37,12 +38,13 @@ class FWIXProblem(Prblm.Problem):
 					"rx": "rx",
 					"ry": "ry",
 					"rz": "rz",
+					"freq_id" : "freq_band_id"
 				},
 				retry_tasks: int = 3,
 			):
 		
 		super(FWIXProblem, self).__init__()
-		
+		self.client = get_client()
 		# Data and Parameters
 		# create the reading pipeline (i.e., read + float_to_complex conversion)
 		self.data = data_pipeline.execute(return_pandas=False) # dask dataframe
@@ -50,10 +52,18 @@ class FWIXProblem(Prblm.Problem):
 		self.problem_par = problem_par
 		self.retry_tasks = retry_tasks
 
-		if not wavelet[geometry_mapping['id']].is_monotonic_increasing:
-			wavelet = wavelet.sort_values(geometry_mapping['id'])
-		wavelet = wavelet.set_index(geometry_mapping['id'])
-		self.wavelet = wavelet
+		
+		freq_col = geometry_mapping['freq_id']
+		shot_col = geometry_mapping['id']
+
+		print("Mapping pure partitions...")
+		self.partition_map = self._get_partition_map(
+			self.data, freq_col
+		)
+	
+		wavelet_indexed = wavelet.drop_duplicates(subset=[freq_col, shot_col])
+		wavelet_indexed = wavelet_indexed.set_index([freq_col, shot_col]).sort_index()
+		self.wavelet = wavelet_indexed
 		
 		# Batching Config (Crucial for Memory)
 		self.shots_per_gpu = shots_per_gpu
@@ -61,7 +71,7 @@ class FWIXProblem(Prblm.Problem):
 		self.geometry_mapping = geometry_mapping
 
 		# --- 1. Build Physical Model Space (High Res) ---
-		self.phys_model = Vec.superVector(start_model, start_density)
+		self.phys_model = start_model
 		self.phys_grad = self.phys_model.clone().zero()
 		#  get ginsu parameters for padding the model for each shot batch
 
@@ -139,6 +149,29 @@ class FWIXProblem(Prblm.Problem):
 		self.dmodel.zero()
 		self.setDefaults()
 
+	def _get_partition_map(self, ddf, freq_col):
+		"""
+		Returns {freq_id: [list_of_partition_indices]}
+		Assumes partitions are homogeneous (pure).
+		"""
+		# 1. Light function: Get frequency of just the first row
+		def get_partition_freq(df):
+			if len(df) == 0:
+				return -1 # Empty partition marker
+			return int(df[freq_col].iloc[0])
+
+		# 2. Compute map cheaply
+		# Returns a list of ints, e.g., [0, 0, 0, 1, 1, 2, 2...]
+		part_freqs = ddf.map_partitions(get_partition_freq).compute()
+
+		# 3. Invert list to dict
+		p_map = defaultdict(list)
+		for i, fid in enumerate(part_freqs):
+			if fid != -1:
+				p_map[fid].append(i)
+		
+		return dict(p_map)
+
 	def reset(self):
 		self.setDefaults()
 		self.dmodel.zero()
@@ -156,34 +189,58 @@ class FWIXProblem(Prblm.Problem):
 
 		# Reset Physical Gradient
 		self.phys_grad.zero()
+		self.obj = 0.0
 
 		# Distributed FWI Calculation
 		# We pass metadata to help Dask understand the return structure
 		meta_df = pd.DataFrame({'norm_sq': pd.Series(dtype='float64'),
-								'grad': pd.Series(dtype=object)})
+								'grad': pd.Series(dtype=object),
+								'freq_id' : pd.Series(dtype=int)
+								})
 		
-		# map_partitions returns a Series of (obj, grad) per partition
-		res_df = self.data.map_partitions(
-			_obj_grad_worker,
-			self.phys_model, 
-			self.wavelet,
-			self.prop_par,
-			self.shots_per_gpu,       # Pass batch size
-			self.gpu_stream_batches,
-			self.geometry_mapping,
-			meta=meta_df
-		)
+		all_obj_grad = []
+		ftag = self.geometry_mapping['freq_id']
+		# Schedule all computation
+		# phys_model = [[Slow_0, Den_0], [Slow_1, Den_1], ...]
+		for freq_id, slow_den in enumerate(self.phys_model.vecs):
+			# Get the frequency slice of the data 
+			indices = self.partition_map.get(freq_id, [])
+			if not indices:
+				continue 
+			# 2. Select the subset of partitions directly
+			# This creates a Dask DataFrame containing ONLY the pure partitions for this freq
+			part_data = self.data.partitions[indices]
+	
+			mask = self.wavelet.index.get_level_values(ftag) == freq_id
+			part_wav = self.wavelet[mask]
+			part_df = part_data.map_partitions(
+				_obj_grad_worker,
+				slow_den, 
+				part_wav,	# this is a dataframe
+				self.prop_par,
+				self.shots_per_gpu,       # Pass batch size
+				self.gpu_stream_batches,
+				self.geometry_mapping,
+				freq_id,
+				meta=meta_df
+			)
+			fut_res = self.client.compute(part_df.to_delayed(), retries=self.retry_tasks)
+			all_obj_grad.extend(fut_res)
 
-		# Aggregate Results
-		fut_obj = res_df['norm_sq'].sum()
-		fut_grad = res_df['grad'].reduction(
-			chunk = _reduce_vector,
-			aggregate = _reduce_vector,
-			meta=pd.Series([],dtype=object)
-		)
-		total_obj, total_grad = dask.compute(fut_obj, fut_grad, retries=self.retry_tasks)
-		self.obj = 0.5 * total_obj
-		self.phys_grad.copy(total_grad.values[0])
+		# Gather all the sources chunks
+		for fut_res, res_df in as_completed(all_obj_grad, with_results=True):
+			if len(res_df) == 0:
+				continue
+			
+			r_obj = res_df['norm_sq'].iloc[0]
+			r_grad = res_df['grad'].iloc[0]
+			r_freq = int(res_df['freq_id'].iloc[0])
+
+			self.obj += r_obj * 0.5
+			if not self.phys_grad.vecs[r_freq].checkSame(r_grad):
+				raise ValueError("Gradient vector from worker does not match expected frequency gradient vector.")
+			self.phys_grad.vecs[r_freq].scaleAdd(r_grad)
+			del res_df
 
 		# Regularization (Physical Domain)
 		if self.reg_op:
@@ -211,6 +268,9 @@ class FWIXProblem(Prblm.Problem):
 	def get_obj(self, model):
 		self.set_model(model)
 		if not self.obj_updated:
+
+			self.obj = 0.0
+
 			# Map to Physical Domain
 			if self.precond_op:
 				self.precond_op.forward(False, model, self.phys_model)
@@ -221,21 +281,47 @@ class FWIXProblem(Prblm.Problem):
 			# We pass metadata to help Dask understand the return structure
 			meta_df = pd.DataFrame({'norm_sq': pd.Series(dtype='float64')})
 			
-			# map_partitions returns a Series of (obj, grad) per partition
-			res_df = self.data.map_partitions(
-				_obj_worker,
-				self.phys_model, 
-				self.wavelet,
-				self.prop_par,
-				self.shots_per_gpu,       # Pass batch size
-				self.gpu_stream_batches,
-				self.geometry_mapping,
-				meta=meta_df
-			)
+			all_obj = []
+			ftag = self.geometry_mapping['freq_id']
+			# Schedule all computation
+			# phys_model = [[Slow_0, Den_0], [Slow_1, Den_1], ...]
+			
+			for freq_id, slow_den in enumerate(self.phys_model.vecs):
+				# Get the frequency slice of the data 
+				indices = self.partition_map.get(freq_id, [])
+				if not indices:
+					continue 
+				# 2. Select the subset of partitions directly
+				# This creates a Dask DataFrame containing ONLY the pure partitions for this freq
+				part_data = self.data.partitions[indices]
+		
+				mask = self.wavelet.index.get_level_values(ftag) == freq_id
+				part_wav = self.wavelet[mask]
+				part_df = part_data.map_partitions(
+					_obj_worker,
+					slow_den, 
+					part_wav,	# this is a dataframe
+					self.prop_par,
+					self.shots_per_gpu,       # Pass batch size
+					self.gpu_stream_batches,
+					self.geometry_mapping,
+					freq_id,
+					meta=meta_df
+				)
+				fut_res = self.client.compute(part_df.to_delayed(), retries=self.retry_tasks)
+				all_obj.extend(fut_res)
 
-			# Aggregate Results
-			total_df = res_df.sum().compute(retries=self.retry_tasks)
-			self.obj = 0.5 * total_df['norm_sq']
+			# Gather all the sources chunks
+			for fut_res, res_df in as_completed(all_obj, with_results=True):
+				if len(res_df) == 0:
+					continue
+
+				r_obj = res_df['norm_sq'].iloc[0]
+				self.obj += r_obj * 0.5
+
+				del res_df
+
+		self.obj_updated = True
 		return self.obj
 
 	def get_grad(self, model):

@@ -1,9 +1,9 @@
-from pysep3d.sep3d import Sep3DStep
+from pysep3d.sep3d import ProcessingStep
 import Hypercube
 import SepVector
 import numpy as np
 
-class ConvertToSepVector (Sep3DStep):
+class ConvertToSepVector (ProcessingStep):
     """Convert numpy arrays in 'data' column to SepVector objects"""
     def __init__(self, ns, ds, os, column='data'):
         self.ns = ns
