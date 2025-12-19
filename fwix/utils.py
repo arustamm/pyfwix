@@ -207,9 +207,7 @@ def get_slices(geometry, slowness, pad_x, pad_y):
     
     return slices
 
-def prepare_extended_model(model, nf, of, df, path, pad_z=0, 
-                           chunks=None, shards=None,
-                           remove_file=False, temp_dir='/tmp/') -> ZarrVector:
+def prepare_extended_model(model, nf, of, df, pad_z=0) -> ZarrVector:
     """
     Fully lazy version - never materializes the full array in memory.
     """
@@ -222,24 +220,16 @@ def prepare_extended_model(model, nf, of, df, path, pad_z=0,
     dz, dy, dx = axes[0].d, axes[1].d, axes[2].d
     n_pad = int(round(pad_z / dz))
     
-    if chunks is None:
-        chunks = (min(100, nz + n_pad), min(10, nf), min(100, ny), min(100, nx))
-    
-    # ===== FULLY LAZY PIPELINE =====
-    
-    # 1. Convert model to Dask (lazy - no data read yet)
-    model_dask = da.from_array(model[:], chunks=(nx, ny, nz))
-    
     # 2. Lazy pad
-    model_padded = da.pad(
-        model_dask,
+    model_padded = np.pad(
+        model[:],
         pad_width=((0, 0), (0, 0), (n_pad, 0)),
         mode='constant',
         constant_values=1.5
     )
     
     # 3. Lazy transpose: (nz, ny, nx+n_pad) -> (nz+n_pad, ny, nx)
-    transposed = da.transpose(model_padded, (2, 0, 1))
+    transposed = np.transpose(model_padded, (2, 0, 1))
     
     # 4. Lazy compute 1/v^2
     inv_squared = 1.0 / (transposed ** 2)
@@ -247,26 +237,16 @@ def prepare_extended_model(model, nf, of, df, path, pad_z=0,
     
     # 5. Add frequency dimension and broadcast
     # (nz+n_pad, ny, nx) -> (nz+n_pad, ny, nx, 1) -> (nz+n_pad, ny, nx, nf)
-    extended = da.broadcast_to(
+    extended = np.broadcast_to(
         inv_squared[:, np.newaxis, :, :],
         shape=(nz + n_pad, nf, nx, ny)
     )
     
-    # 7. Rechunk for optimal storage
-    extended = extended.rechunk(chunks)
-    
-    # 8. Execute entire pipeline and write
-    extended.to_zarr(path, overwrite=True, compute=True)
-    
-    # 9. Wrap in ZarrVector
-    za = zarr.open_array(path, mode='r+')
-    za.attrs['ns'] = [ny, nx, nf, nz + n_pad]
-    za.attrs['ds'] = [dy, dx, df, dz]
-    za.attrs['os'] = [oy, ox, of, oz]
-    
-    return ZarrVector(
-        existing_zarr_array=za,
-        path=path,
-        temp_dir=temp_dir,
-        remove_file=remove_file
+    ext_model = SepVector.getSepVector(
+        ns = [ny, nx, nf, nz + n_pad],
+        os = [oy, ox, of, 0.0],
+        ds = [dy, dx, df, dz], storage='dataComplex'
     )
+    ext_model[:] = extended[:]
+
+    return ext_model

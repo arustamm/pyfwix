@@ -2,6 +2,7 @@ name: fwix
 channels:
   - conda-forge
   - nvidia/label/cuda-12.4.1
+  - rapidsai
 dependencies:
   - cuda-toolkit
   - cuda-nvcc
@@ -44,6 +45,9 @@ dependencies:
   - distributed==2025.1.0
   - dask-labextension
   - zarr
+  - rapidsai:
+      - ucx
+      - ucx-py
 
   - holoviews
   - jupyterlab

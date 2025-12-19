@@ -60,6 +60,7 @@ class FWIXProblem(Prblm.Problem):
 		self.partition_map = self._get_partition_map(
 			self.data, freq_col
 		)
+		print(self.partition_map)
 	
 		wavelet_indexed = wavelet.drop_duplicates(subset=[freq_col, shot_col])
 		wavelet_indexed = wavelet_indexed.set_index([freq_col, shot_col]).sort_index()
@@ -192,55 +193,76 @@ class FWIXProblem(Prblm.Problem):
 		self.obj = 0.0
 
 		# Distributed FWI Calculation
-		# We pass metadata to help Dask understand the return structure
-		meta_df = pd.DataFrame({'norm_sq': pd.Series(dtype='float64'),
-								'grad': pd.Series(dtype=object),
-								'freq_id' : pd.Series(dtype=int)
-								})
-		
-		all_obj_grad = []
+		meta_df = pd.DataFrame({
+			'norm_sq': pd.Series(dtype='float64'),
+			'grad': pd.Series(dtype=object),
+			'freq_id': pd.Series(dtype=int)
+		})
+
 		ftag = self.geometry_mapping['freq_id']
-		# Schedule all computation
-		# phys_model = [[Slow_0, Den_0], [Slow_1, Den_1], ...]
+
+		# Build list of reduction tasks (one per frequency)
+		freq_reductions = []
+
+		# Schedule all computation per frequency band
 		for freq_id, slow_den in enumerate(self.phys_model.vecs):
 			# Get the frequency slice of the data 
 			indices = self.partition_map.get(freq_id, [])
 			if not indices:
 				continue 
-			# 2. Select the subset of partitions directly
-			# This creates a Dask DataFrame containing ONLY the pure partitions for this freq
+			
+			# Select the subset of partitions for this frequency
 			part_data = self.data.partitions[indices]
-	
+
 			mask = self.wavelet.index.get_level_values(ftag) == freq_id
 			part_wav = self.wavelet[mask]
+			
+			# Map partitions to compute obj/grad per shot batch
 			part_df = part_data.map_partitions(
 				_obj_grad_worker,
 				slow_den, 
-				part_wav,	# this is a dataframe
+				part_wav,
 				self.prop_par,
-				self.shots_per_gpu,       # Pass batch size
+				self.shots_per_gpu,
 				self.gpu_stream_batches,
 				self.geometry_mapping,
 				freq_id,
 				meta=meta_df
 			)
-			fut_res = self.client.compute(part_df.to_delayed(), retries=self.retry_tasks)
-			all_obj_grad.extend(fut_res)
-
-		# Gather all the sources chunks
-		for fut_res, res_df in as_completed(all_obj_grad, with_results=True):
-			if len(res_df) == 0:
-				continue
 			
-			r_obj = res_df['norm_sq'].iloc[0]
-			r_grad = res_df['grad'].iloc[0]
-			r_freq = int(res_df['freq_id'].iloc[0])
+			# Create reduction task for this frequency band
+			delayed_partitions = part_df.to_delayed()
+			freq_reduction = dask.delayed(_reduce_freq_partitions)(
+				delayed_partitions, freq_id
+			)
+			freq_reductions.append(freq_reduction)
 
-			self.obj += r_obj * 0.5
-			if not self.phys_grad.vecs[r_freq].checkSame(r_grad):
-				raise ValueError("Gradient vector from worker does not match expected frequency gradient vector.")
-			self.phys_grad.vecs[r_freq].scaleAdd(r_grad)
-			del res_df
+		# Compute all frequency reductions in parallel
+		print(f"FWIX: Submitting graph with {len(freq_reductions)} frequency bands...")
+		freq_results = self.client.compute(freq_reductions, retries=self.retry_tasks)
+
+		# Stream results as they complete (memory-efficient)
+		for fut in as_completed(freq_results):
+			freq_id, total_obj, total_grad = fut.result()
+			
+			if total_grad is None or freq_id == -1:
+				print(f"FWIX: Warning - freq band {freq_id} returned no data")
+				continue
+
+			print(f"FWIX: Received freq band {freq_id}, obj={total_obj:.4e}")
+			
+			# Accumulate objective (with 0.5 factor)
+			self.obj += 0.5 * total_obj
+			
+			# Validate and accumulate gradient
+			if not self.phys_grad.vecs[freq_id].checkSame(total_grad):
+				raise ValueError(
+					f"Gradient shape mismatch for frequency {freq_id}"
+				)
+			self.phys_grad.vecs[freq_id].scaleAdd(total_grad)
+			
+			# Cleanup
+			del total_grad, fut
 
 		# Regularization (Physical Domain)
 		if self.reg_op:
@@ -268,7 +290,6 @@ class FWIXProblem(Prblm.Problem):
 	def get_obj(self, model):
 		self.set_model(model)
 		if not self.obj_updated:
-
 			self.obj = 0.0
 
 			# Map to Physical Domain
@@ -277,49 +298,49 @@ class FWIXProblem(Prblm.Problem):
 			else:
 				self.phys_model.copy(model)
 
-			# Distributed FWI Calculation
-			# We pass metadata to help Dask understand the return structure
 			meta_df = pd.DataFrame({'norm_sq': pd.Series(dtype='float64')})
-			
-			all_obj = []
 			ftag = self.geometry_mapping['freq_id']
-			# Schedule all computation
-			# phys_model = [[Slow_0, Den_0], [Slow_1, Den_1], ...]
 			
+			# Build list of reduction tasks (one per frequency)
+			freq_reductions = []	
+
 			for freq_id, slow_den in enumerate(self.phys_model.vecs):
-				# Get the frequency slice of the data 
 				indices = self.partition_map.get(freq_id, [])
 				if not indices:
 					continue 
-				# 2. Select the subset of partitions directly
-				# This creates a Dask DataFrame containing ONLY the pure partitions for this freq
+
 				part_data = self.data.partitions[indices]
-		
 				mask = self.wavelet.index.get_level_values(ftag) == freq_id
 				part_wav = self.wavelet[mask]
+				
 				part_df = part_data.map_partitions(
 					_obj_worker,
-					slow_den, 
-					part_wav,	# this is a dataframe
+					slow_den,
+					part_wav,
 					self.prop_par,
-					self.shots_per_gpu,       # Pass batch size
+					self.shots_per_gpu,
 					self.gpu_stream_batches,
 					self.geometry_mapping,
 					freq_id,
 					meta=meta_df
 				)
-				fut_res = self.client.compute(part_df.to_delayed(), retries=self.retry_tasks)
-				all_obj.extend(fut_res)
+				
+				# Sum within each frequency band
+				freq_sum = part_df['norm_sq'].sum()
+				freq_reductions.append(freq_sum)
 
-			# Gather all the sources chunks
-			for fut_res, res_df in as_completed(all_obj, with_results=True):
-				if len(res_df) == 0:
-					continue
+			# Compute all frequency sums in parallel, then reduce locally
+			freq_results = self.client.compute(freq_reductions, retries=self.retry_tasks)
+			
+			# Stream and accumulate
+			for fut in as_completed(freq_results):
+				freq_obj = fut.result()
+				self.obj += 0.5 * freq_obj
 
-				r_obj = res_df['norm_sq'].iloc[0]
-				self.obj += r_obj * 0.5
-
-				del res_df
+			# Add regularization
+			if self.reg_op:
+				self.reg_op.forward(False, self.phys_model, self.reg_vec)
+				self.obj += 0.5 * (self.epsilon**2) * self.reg_vec.norm()**2
 
 		self.obj_updated = True
 		return self.obj
@@ -336,3 +357,50 @@ class FWIXProblem(Prblm.Problem):
 
 	def get_res(self, model):
 		raise NotImplementedError("FWIX residuals are too large for memory. Use get_obj() or get_rnorm().")
+
+def _reduce_freq_partitions(partition_dfs, freq_id):
+	"""
+	Reduces all partition results for a single frequency band.
+	
+	Args:
+		partition_dfs: List of DataFrames, each with columns 
+					  ['norm_sq', 'grad', 'freq_id']
+		freq_id: The frequency band ID (for validation)
+	
+	Returns:
+		(freq_id, total_obj, accumulated_grad)
+	"""
+	total_obj = 0.0
+	total_grad = None
+	
+	for df in partition_dfs:
+		# Skip empty partitions
+		if df is None or len(df) == 0:
+			continue
+		
+		# Each partition should return exactly 1 row
+		if len(df) != 1:
+			print(f"Warning: partition returned {len(df)} rows, expected 1")
+			continue
+		
+		row = df.iloc[0]
+		
+		# Validate frequency ID
+		if int(row['freq_id']) != freq_id:
+			raise ValueError(
+				f"Frequency mismatch: expected {freq_id}, "
+				f"got {row['freq_id']}"
+			)
+		
+		# Accumulate objective
+		total_obj += row['norm_sq']
+		
+		# Accumulate gradient
+		grad_chunk = row['grad']
+		if grad_chunk is not None:
+			if total_grad is None:
+				total_grad = grad_chunk.clone()
+			else:
+				total_grad.scaleAdd(grad_chunk, 1.0, 1.0)
+	
+	return freq_id, total_obj, total_grad
