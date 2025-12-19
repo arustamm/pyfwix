@@ -27,10 +27,12 @@ void WavefieldPool::initialize(
 
 	// Create shared pools
 	_max_depth = max_depth;
-	wfld_pool.resize(nwflds_to_store);
 	events_pool.resize(nwflds_to_store);
+	// compression resources
+	wfld_pool.resize(nwflds_to_store);
 	zfp_stream_pool.resize(nwflds_to_store);
 	zfp_field_pool.resize(nwflds_to_store);
+	// decompression resources
 	_decomp_wfld_pool.resize(nwflds_to_store);
 	_decomp_zfp_stream_pool.resize(nwflds_to_store);
 	_decomp_zfp_field_pool.resize(nwflds_to_store);
