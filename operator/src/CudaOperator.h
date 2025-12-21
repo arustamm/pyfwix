@@ -169,11 +169,11 @@ const std::shared_ptr<hypercube>& getDomain() const{
 const std::shared_ptr<hypercube>& getRange() const{
 	return _range;
 }
-const int getDomainSize() const{
-	return _domain->getN123();
+const size_t getDomainSize() const{
+	return static_cast<size_t>(_domain->getN123());
 }
-const int getRangeSize() const{
-	return _range->getN123();
+const size_t getRangeSize() const{
+	return static_cast<size_t>(_range->getN123());
 }
 const size_t getDomainSizeInBytes() const{
 	return sizeof(cuFloatComplex)*_domain->getN123();

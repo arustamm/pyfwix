@@ -28,16 +28,17 @@ CudaOperator<complex4DReg, complex2DReg>(domain, range, grid, block, stream) {
 
   auto run_id = propagator->getRunId();
   run_id.insert(0, "extended_born_");
-	auto wfld_pool = std::make_shared<WavefieldPool>(wfld_hyper, par, run_id, m_ax[3].n);
+	auto _pool_down = std::make_shared<WavefieldPool>(wfld_hyper, par, run_id, m_ax[3].n);
+  auto _pool_up = std::make_shared<WavefieldPool>(wfld_hyper, par, run_id, m_ax[3].n);
 
   down = std::make_shared<Downward>(wfld_hyper, 
     _slow->getHyper(), par, 
-    propagator->getRefSampler(), wfld_pool, "down",
+    propagator->getRefSampler(), _pool_down, "down",
     inj_rec->data_vec, inj_rec->data_vec, _grid_, _block_, _stream_);
 
 	up = std::make_shared<Upward>(wfld_hyper, 
     _slow->getHyper(), par, 
-    propagator->getRefSampler(), wfld_pool, "up",
+    propagator->getRefSampler(), _pool_up, "up",
     inj_rec->data_vec, inj_rec->data_vec, _grid_, _block_, _stream_);
 
   ax = domain->getAxes();
@@ -91,16 +92,6 @@ void ExtendedBorn::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> 
   downward_reflected_scattering_fwd(model);
   upward_scattering_fwd(model);
   backward_scattering_fwd(model);
-
-  // Check if the decompression queue is empty
-  if (bg_down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue after background down not empty");
-  if (bg_up->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue after background up not empty");
-  if (down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue after down-scattering not empty");
-  if (up->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue after up-scattering not empty");
   
 
   CHECK_CUDA_ERROR(cudaMemcpyAsync(local_data->getVals(), _propagator->data_vec->mat, getRangeSizeInBytes(), cudaMemcpyDeviceToHost, _stream_));
@@ -133,26 +124,13 @@ void ExtendedBorn::adjoint(bool add, std::vector<std::shared_ptr<complex4DReg>> 
   downward_scattering_adj(model);
   backward_scattering_adj(model);
 
-  // Check if the decompression queue is empty
-  if (bg_down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue after background down not empty");
-  if (bg_up->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue after background up not empty");
-  if (down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue after down-scattering not empty");
-  if (up->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue after up-scattering not empty");
-
-
     // unpin the memory
   CHECK_CUDA_ERROR(cudaHostUnregister(data->getVals()));
 
 }
 
 void ExtendedBorn::downward_scattering_fwd(const std::vector<std::shared_ptr<complex4DReg>>& model) {
-  if (bg_down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before down-scattering not empty");
-  bg_down->start_decompress_from_top();
+
   down_scattering->data_vec->zero();
   for (int iz = 0; iz < ax[3].n; iz++) {
 
@@ -160,13 +138,11 @@ void ExtendedBorn::downward_scattering_fwd(const std::vector<std::shared_ptr<com
     size_t offset = iz * this->getSliceSize();
     CHECK_CUDA_ERROR(cudaMemcpyAsync(dslow->mat, model[0]->getVals() + offset, this->getSliceSizeInBytes(), cudaMemcpyHostToDevice, _stream_));
 
-    // Get the decompressed background wavefields and remove them from the queue
+    // Get the decompressed background wavefields 
     down_scattering->set_depth(iz);
-    // Schedule more decompression 
-    bg_down->add_decompresss_from_top(iz);
 
     // Record the wavefield
-    down->compress_slice(iz, down_scattering->data_vec);
+    down->save_slice(iz, down_scattering->data_vec);
     inj_rec->set_depth(iz);
     inj_rec->cu_adjoint(true, _propagator->data_vec, down_scattering->data_vec);
 
@@ -174,18 +150,14 @@ void ExtendedBorn::downward_scattering_fwd(const std::vector<std::shared_ptr<com
     down->one_step_fwd(iz, down_scattering->data_vec);
     down_scattering->cu_forward(true, dslow, down_scattering->data_vec);
   }
-  down->wait_to_finish();
 };
 
 void ExtendedBorn::downward_scattering_adj(std::vector<std::shared_ptr<complex4DReg>>& model) {
-  if (bg_down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before down-scattering not empty");
-  bg_down->start_decompress_from_bottom();
+
   down_scattering->data_vec->zero();
   for (int iz = ax[3].n-1; iz >= 0; iz--) {
     // Schedule more decompression (except for the last depth)
     down_scattering->set_depth(iz);
-    bg_down->add_decompresss_from_bottom(iz);
     
     down_scattering->cu_adjoint(false, dslow, down_scattering->data_vec);
     down->one_step_adj(iz, down_scattering->data_vec);
@@ -210,18 +182,10 @@ void ExtendedBorn::downward_scattering_adj(std::vector<std::shared_ptr<complex4D
 void ExtendedBorn::downward_reflected_scattering_fwd(const std::vector<std::shared_ptr<complex4DReg>>& model) {
   wfld_slice_gpu->zero();
   down_scattering->data_vec->zero();
-  if (down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before reflected down-scattering not empty");
-	down->start_decompress_from_bottom();
+
   for (int iz=ax[3].n-1; iz >= 0; --iz) {
 
-    std::shared_ptr<complex4DReg> down_wfld_host = down->get_next_wfld_slice();
-
-		// Schedule the next decompression task to maintain the look-ahead window.
-		down->add_decompresss_from_bottom(iz);
-
-		// Asynchronously copy the decompressed data from host to GPU.
-		CHECK_CUDA_ERROR(cudaMemcpyAsync(wfld_slice_gpu->mat, down_wfld_host->getVals(), down->getDomainSizeInBytes(), cudaMemcpyHostToDevice, _stream_));
+    down->load_slice(iz, wfld_slice_gpu);
 
 		// Enqueue GPU work for the current slice `iz`.
 		up->one_step_fwd(iz, down_scattering->data_vec);
@@ -234,30 +198,19 @@ void ExtendedBorn::downward_reflected_scattering_fwd(const std::vector<std::shar
     // Save the wavefield
 		// up->compress_slice(iz, up->data_vec);
   }
-  up->wait_to_finish();
 };
 
 void ExtendedBorn::downward_reflected_scattering_adj(std::vector<std::shared_ptr<complex4DReg>>& model) {
-  if (bg_down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before down-scattering not empty");
-  bg_down->start_decompress_from_bottom();
   // Be careful here as this will be overwritten by the up propagation
  wfld_slice_gpu->zero();
   down_scattering->data_vec->zero();
-  if (up->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before reflected up-scattering not empty");
-	up->start_decompress_from_bottom();
 
   for (int iz = ax[3].n-1; iz >= 0; iz--) {
     // Get the decompressed background wavefields and remove them from the queue
-    std::shared_ptr<complex4DReg> up_wfld_host = up->get_next_wfld_slice();
-    // Asynchronously copy the decompressed data from host to GPU.
-		CHECK_CUDA_ERROR(cudaMemcpyAsync(wfld_slice_gpu->mat, up_wfld_host->getVals(), up->getDomainSizeInBytes(), cudaMemcpyHostToDevice, _stream_));
+    up->load_slice(iz, wfld_slice_gpu);
 
-    up->add_decompresss_from_bottom(iz);
     // Schedule more decompression (except for the last depth)
     down_scattering->set_depth(iz);
-    bg_down->add_decompresss_from_bottom(iz);
     
     down_scattering->cu_adjoint(false, dslow, down_scattering->data_vec);
     down->one_step_adj(iz, down_scattering->data_vec);
@@ -281,9 +234,7 @@ void ExtendedBorn::downward_reflected_scattering_adj(std::vector<std::shared_ptr
 
 void ExtendedBorn::upward_scattering_fwd(const std::vector<std::shared_ptr<complex4DReg>>& model) {
   up_scattering->data_vec->zero();
-  if (bg_up->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before up-scattering not empty");
-  bg_up->start_decompress_from_bottom();
+
   for (int iz=ax[3].n-1; iz >= 0; --iz) {
 
     // Copy the current depth slice of the model
@@ -292,8 +243,6 @@ void ExtendedBorn::upward_scattering_fwd(const std::vector<std::shared_ptr<compl
 
     // Get the decompressed background wavefields and remove them from the queue
     up_scattering->set_depth(iz);
-    // Schedule more decompression
-    bg_up->add_decompresss_from_bottom(iz);
 
     // Record the wavefield
     inj_rec->set_depth(iz);
@@ -313,15 +262,11 @@ void ExtendedBorn::upward_scattering_fwd(const std::vector<std::shared_ptr<compl
 void ExtendedBorn::upward_scattering_adj(std::vector<std::shared_ptr<complex4DReg>>& model) {
   up_scattering->data_vec->zero();
   dslow->zero();
-  if (bg_up->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before up-scattering not empty");
-  bg_up->start_decompress_from_top();
+
   for (int iz=0; iz < ax[3].n; ++iz) {
 
     // Get the decompressed background wavefields and remove them from the queue
     up_scattering->set_depth(iz);
-    // Schedule more decompression
-    bg_up->add_decompresss_from_top(iz);
 
     // This is so that all the wavefields are removed from the decompression queue
     if (iz > 0) {
@@ -334,7 +279,7 @@ void ExtendedBorn::upward_scattering_adj(std::vector<std::shared_ptr<complex4DRe
     // Inject into the wavefield
     inj_rec->set_depth(iz);
     inj_rec->cu_forward(true, _propagator->data_vec, up_scattering->data_vec);
-    up->compress_slice(iz, up_scattering->data_vec);
+    up->save_slice(iz, up_scattering->data_vec);
 
     // Copy the current depth slice of the model
     size_t offset = iz * this->getSliceSize();
@@ -345,15 +290,12 @@ void ExtendedBorn::upward_scattering_adj(std::vector<std::shared_ptr<complex4DRe
       model[0]->getVals() + offset, model[0]->getVals() + offset,
       std::plus<std::complex<float>>());
   }
-  up->wait_to_finish();
 };
 
 
 void ExtendedBorn::backward_scattering_fwd(const std::vector<std::shared_ptr<complex4DReg>>& model) {
   back_scattering->data_vec->zero();
-  if (bg_down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before back-scattering not empty");
-	bg_down->start_decompress_from_bottom();
+
   for (int iz=ax[3].n-1; iz >= 0; --iz) {
 
     size_t offset = iz * this->getSliceSize();
@@ -375,8 +317,6 @@ void ExtendedBorn::backward_scattering_fwd(const std::vector<std::shared_ptr<com
 
     // Get the decompressed background wavefields and remove them from the queue
     back_scattering->set_depth(iz);
-		// Schedule the next decompression task to maintain the look-ahead window.
-		bg_down->add_decompresss_from_bottom(iz);
 
 		// Enqueue GPU work for the current slice `iz`.
 		up->one_step_fwd(iz, back_scattering->data_vec);
@@ -390,15 +330,11 @@ void ExtendedBorn::backward_scattering_fwd(const std::vector<std::shared_ptr<com
 
 void ExtendedBorn::backward_scattering_adj(std::vector<std::shared_ptr<complex4DReg>>& model) {
   back_scattering->data_vec->zero();
-  if (bg_down->get_decomp_queue_size() > 0) 
-    throw std::runtime_error("Decompression queue before back-scattering not empty");
-	bg_down->start_decompress_from_top();
+
   for (int iz=0; iz < ax[3].n; ++iz) {
 
     // Get the decompressed background wavefields and remove them from the queue
     back_scattering->set_depth(iz);
-		// Schedule the next decompression task to maintain the look-ahead window.
-		bg_down->add_decompresss_from_top(iz);
 
     inj_rec->set_depth(iz);
 		inj_rec->cu_forward(true, _propagator->data_vec, back_scattering->data_vec);

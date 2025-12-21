@@ -72,7 +72,7 @@ set_property(TARGET CudaWEM PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(CudaWEM
 						genericCpp sepVector hypercube
 						jsonCpp sep3d sep
-					  	CUDA::cudart_static CUDA::cufft_static zfp::zfp
+					  	CUDA::cudart_static CUDA::cufft_static cuSZp_static
 						${OpenCV_LIBS} tbb
 						pybind11::module Python::Module
 						)

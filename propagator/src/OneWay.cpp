@@ -22,12 +22,10 @@ void Downward::cu_forward(bool add, complex_vector* __restrict__ model, complex_
 	if(!add) data->zero();
 
 	for (int iz=0; iz < m_ax[3].n; ++iz) {
-		this->compress_slice(iz, model);
+		_wfld_pool->save_slice(iz, model, _stream_);
 		// Enqueue more work!
 		this->one_step_fwd(iz, model);
 	}
-
-	_wfld_pool->wait_to_finish();
 
 	data->add(model);
 
@@ -38,7 +36,7 @@ void Downward::cu_adjoint(bool add, complex_vector* __restrict__ model, complex_
 	if(!add) model->zero();
 
 	for (int iz=m_ax[3].n; iz > 0; --iz) {
-		this->compress_slice(iz, model);
+		// _wfld_pool->save_slice(iz, model, _stream_);
 		// propagate one step
 		this->one_step_adj(iz-1, data);
 	}
@@ -58,8 +56,6 @@ void Upward::cu_forward(bool add, complex_vector* __restrict__ model, complex_ve
 		// Enqueue more work!
 		this->one_step_fwd(iz-1, model);
 	}
-
-  _wfld_pool->wait_to_finish();
 
 	data->add(model);
 

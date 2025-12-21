@@ -105,18 +105,15 @@ class IC_Test : public testing::Test {
 
 TEST_F(IC_Test, cu_fwd) {
 	dslow->set(1.f);
-	down->start_decompress_from_top();
 
 	for (int i=0; i < ax[4].n; ++i) {
 		ASSERT_NO_THROW(ic->set_depth(i));
 		ASSERT_NO_THROW(ic->forward(false, dslow, wfld1));
-		ASSERT_NO_THROW(down->add_decompresss_from_top(i));
 		ASSERT_TRUE(std::real(wfld1->dot(wfld1)) > 0.0) << "Forward imaging condition failed at depth " << i;
 	}
 }
 
 TEST_F(IC_Test, dotTest) {
-	ASSERT_NO_THROW(down->add_decompresss_from_top(5));
 	ic->set_depth(5);
 	auto err = ic->dotTest(verbose);
 	ASSERT_TRUE(err.first <= tolerance);
@@ -226,17 +223,14 @@ class ForwardScattering_Test : public testing::Test {
 
 TEST_F(ForwardScattering_Test, cu_fwd) {
 	dslow->set(1.f);
-	down->start_decompress_from_top();
 	for (int i=0; i < ax[4].n; ++i) {
 		ASSERT_NO_THROW(fscat->set_depth(i));
 		ASSERT_NO_THROW(fscat->forward(false, dslow, wfld1));
-		ASSERT_NO_THROW(down->add_decompresss_from_top(i));
 		ASSERT_TRUE(std::real(wfld1->dot(wfld1)) > 0.0) << "Forward scattering failed at depth " << i;
 	}
 }
 
 TEST_F(ForwardScattering_Test, dotTest) {
-	ASSERT_NO_THROW(down->add_decompresss_from_top(5));
 	fscat->set_depth(5);
 	auto err = fscat->dotTest(verbose);
 	ASSERT_TRUE(err.first <= tolerance);
@@ -289,17 +283,14 @@ class BackScattering_Test : public testing::Test {
 
 TEST_F(BackScattering_Test, cu_fwd) {
 	dmodel->random();
-	down->start_decompress_from_top();
 	for (int i=0; i < ax[4].n; ++i) {
 		ASSERT_NO_THROW(bscat->set_depth(i));
 		ASSERT_NO_THROW(bscat->forward(false, dmodel, wfld1));
-		ASSERT_NO_THROW(down->add_decompresss_from_top(i));
 		ASSERT_TRUE(std::real(wfld1->dot(wfld1)) > 0.0) << "Forward scattering failed at depth " << i;
 	}
 }
 
 TEST_F(BackScattering_Test, dotTest) {
-	ASSERT_NO_THROW(down->add_decompresss_from_top(5));
 	bscat->set_depth(5);
 	auto err = bscat->dotTest(verbose);
 	ASSERT_TRUE(err.first <= tolerance);
@@ -391,7 +382,7 @@ protected:
 		root["pady"] = ax[1].n;
 		root["taperx"] = 0;
 		root["tapery"] = 0;
-		root["compress_rate"] = 32;
+		root["compress_error"] = 0.0;
 		auto par = std::make_shared<jsonParamObj>(root);
 
 		auto prop = std::make_shared<Propagator>(

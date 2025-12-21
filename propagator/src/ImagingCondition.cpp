@@ -23,13 +23,7 @@ _oneway(oneway)	{
 }
 
 void ImagingCondition::set_depth(int iz) {
-	auto bg_wfld = _oneway->get_next_wfld_slice();
-	CHECK_CUDA_ERROR(cudaMemcpyAsync(
-		_bg_wfld_slice->mat,
-		bg_wfld->getVals(), 
-		getRangeSizeInBytes(), 
-		cudaMemcpyHostToDevice, _stream_
-	));
+	_oneway->load_slice(iz, _bg_wfld_slice);
 }
 
 

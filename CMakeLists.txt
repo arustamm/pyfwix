@@ -7,6 +7,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 set(CMAKE_INCLUDE_CURRENT_DIR TRUE)
 
+include(FetchContent)
+
+FetchContent_Declare(
+  cuSZp
+  GIT_REPOSITORY https://github.com/szcompressor/cuSZp.git
+  GIT_TAG        6ab90a5  
+)
+
+# This downloads cuSZp and runs its CMakeLists.txt
+# It effectively adds it as a sub-project.
+FetchContent_MakeAvailable(cuSZp)
+include_directories(${cuSZp_SOURCE_DIR}/include)
+
 # Find common dependencies once to avoid version conflicts
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(Boost REQUIRED)
@@ -27,9 +40,6 @@ endif(SEPlib_FOUND)
 find_package(GTest REQUIRED)
 find_package(OpenCV REQUIRED core )
 include_directories( ${OpenCV_INCLUDE_DIRS} )
-
-find_package(zfp REQUIRED CONFIG)
-message(STATUS "Found ZFP: ${zfp_DIR}")
 
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 REQUIRED)
@@ -53,7 +63,7 @@ set_target_properties(pyFWIX PROPERTIES
 target_link_libraries(pyFWIX PRIVATE
     genericCpp sepVector hypercube
     jsonCpp sep3d sep
-    CUDA::cudart_static CUDA::cufft_static zfp::zfp
+    CUDA::cudart_static CUDA::cufft_static cuSZp_static
     ${OpenCV_LIBS} tbb
     pybind11::module Python::Module
 )

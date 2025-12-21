@@ -2,14 +2,10 @@
 #include <CudaOperator.h>
 #include <complex4DReg.h>
 #include <paramObj.h>
-#include <OneStep.h>
-#include <Reflect.h>
-
-#include <sep_reg_file.h>
-#include <utils.h>
-#include <ioModes.h>
-#include "zfp.h"
-#include <queue>
+#include <cuSZp.h>
+#include <vector>
+#include <mutex>
+#include <cstring> // for std::memcpy
 
 class WavefieldPool {
 public:
@@ -22,73 +18,51 @@ public:
         cleanup();
     }
 
-    // Compression/decompression interface
-    void compress_slice_async(int iz, complex_vector* wfld, cudaStream_t stream, 
-                              std::string& tag);
-   	std::pair<int,std::future<std::shared_ptr<complex4DReg>>> decompress_slice_async(int iz, const std::string& tag);
-
-    // Resource management
-    std::shared_ptr<complex4DReg> get_wfld_buffer(int pool_idx) { return wfld_pool[pool_idx]; }
-    void release_decomp_buffer(int pool_idx);
-    int get_pool_size() const { return wfld_pool.size(); }
-    size_t get_total_compressed_size() const { return _total_compressed_size.load(); }
+    // -------------------------------------------------------
+    // Interface: Save/Load directly to/from RAM
+    // -------------------------------------------------------
     
-    // Pipeline management
-    void check_ready();
-    void wait_to_finish();
-    void clear_pipeline();
+    // Compresses the GPU buffer 'wfld' and saves it to RAM at index 'iz'
+    void save_slice(int iz, complex_vector* wfld, cudaStream_t stream);
+
+    // Loads from RAM at index 'iz', decompresses into GPU buffer 'wfld'
+    void load_slice(int iz, complex_vector* wfld, cudaStream_t stream);
+
+    size_t get_compressed_size() {
+        size_t total_size = 0;
+        for (const auto& slice : _ram_storage) {
+            total_size += slice.size() * sizeof(unsigned char);
+        }
+        return total_size;
+    }
 
 private:
     void initialize(std::shared_ptr<hypercube> wfld_hyper, std::shared_ptr<paramObj> par, std::string run_id, int max_depth);
     void cleanup();
-    
-    std::future<void> compress_slice_impl(int iz, int pool_idx, cudaEvent_t event, std::string& tag);
-    int get_or_open_fd(const std::string& tag);
 
-    // Resources
-    size_t _slice_size_bytes;
-    std::vector<std::shared_ptr<complex4DReg>> wfld_pool;
-    std::vector<cudaEvent_t> events_pool;
-    std::vector<zfp_stream*> zfp_stream_pool;
-    std::vector<zfp_field*> zfp_field_pool;
-    double compress_rate;
+    // -------------------------------------------------------
+    // In-Memory Storage
+    // -------------------------------------------------------
+    // _ram_storage[iz] holds the compressed binary data for depth iz
+    std::vector<std::vector<unsigned char>> _ram_storage;
+    std::vector<float> _error_bounds; // Store error bounds per slice
     
-    int _fd = -1;
-    int _max_depth = 0;
-    size_t _chunk_size = 0;
-    std::map<std::string, int> _fd_map;
-    std::mutex _io_mutex; // Protects the map opening
-    
-    std::vector<std::vector<char>> _compressed_buffer_pool; 
-    std::vector<std::vector<char>> _decomp_buffer_pool;
+    // -------------------------------------------------------
+    // cuSZp Resources
+    // -------------------------------------------------------
+    uint3 _dims;              // The "Folded" dimensions
+    double _rel_error;       // Compression tolerance
+    size_t _nbEle;            // Total number of float elements
+    size_t _max_comp_bytes;   // Allocation size for buffers
 
-    // Add dedicated decompression resources
-    std::vector<std::shared_ptr<complex4DReg>> _decomp_wfld_pool;
-	std::vector<zfp_stream*> _decomp_zfp_stream_pool;
-	std::vector<zfp_field*> _decomp_zfp_field_pool;
+    // GPU Output Buffer (Reusable temporary storage)
+    unsigned char* _d_compressed_buffer; 
     
-    // Pipeline management
-    std::queue<std::future<void>> compression_futures;
-    std::queue<std::future<void>> decompression_futures;
-    std::mutex compression_mutex;  // For thread safety
-    
-    // Configuration
-    int nwflds_to_store;
-    double rel_error_bound;
-    size_t slice_size_bytes;
+    // Host Staging Buffer (Pinned memory for fast PCIe transfer)
+    unsigned char* _h_compressed_buffer; 
 
-    std::queue<int> _decomp_free_indices_queue;
-    std::mutex _decomp_pool_mutex;
-    std::condition_variable _decomp_pool_cv;
-
-    std::queue<int> _comp_free_indices_queue;
-    std::mutex _comp_pool_mutex;
-    std::condition_variable _comp_pool_cv;
-    
-    // For tracking ALL in-flight compressions
-    std::queue<std::future<void>> _comp_futures_queue;
-    std::mutex _comp_queue_mutex;
-
-    std::string _base_path;
-    std::atomic<size_t> _total_compressed_size;
+    // Compressed Size Tracker (Pinned Memory)
+    // This matches 'cmpSize1' in the example, but allocated as pinned
+    // so the GPU can write to it and CPU can read it.
+    size_t* _cmpSize; 
 };

@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
     auto ax2 = axis(ny, 0.f, 10.0f);
     nw = 100; // Total frequencies
     auto ax3 = axis(nw, 1.f, 1.f); // Freq: 1Hz to 10Hz
-    ns = 1; 
+    ns = 5; 
     nz = 10;
     auto ax4 = axis(nz, 0.f, 5.0f); // Z axis: 5m spacing
 

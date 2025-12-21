@@ -6,7 +6,11 @@
 #include <cuComplex.h>
 #include <unordered_map>
 
-// thanks to Google's AI Bard
+#include <thrust/device_ptr.h>
+#include <thrust/extrema.h>
+#include <thrust/execution_policy.h>
+#include <thrust/pair.h>
+
 #define ND_TO_FLAT(idx, dims) ( \
     ({ \
         size_t _flat_idx = 0; \
@@ -60,6 +64,8 @@ typedef struct complex_vector
 
     void add(complex_vector* vec);
     void scale(float scale);
+
+    std::pair<float, float> getMinMax();
 
     complex_vector* make_view(int start, int end);
     complex_vector* make_slice();

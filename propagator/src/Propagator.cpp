@@ -96,11 +96,12 @@ CudaOperator<complex2DReg, complex2DReg>(domain, range, model, data, grid, block
            << "_freq" << std::fixed << std::setprecision(2) << fmin << "-" << fmax;
     _run_id = tag_ss.str();
 
-	wfld_pool = std::make_shared<WavefieldPool>(wfld_hyper, par, _run_id, ax[3].n);
+	_pool_down = std::make_shared<WavefieldPool>(wfld_hyper, par, _run_id, ax[3].n);
+	_pool_up = std::make_shared<WavefieldPool>(wfld_hyper, par, _run_id, ax[3].n);
 
 	// TODO: dont have to allocate temp wavefields twice for up and down, can reuse instead
-	down = std::make_shared<Downward>(wfld_hyper, slow_hyper, par, ref, wfld_pool, "down", inj_src->data_vec, inj_src->data_vec, _grid_, _block_, _stream_);
-	up = std::make_shared<Upward>(wfld_hyper, slow_hyper, par, ref, wfld_pool, "up", inj_src->data_vec, inj_src->data_vec, _grid_, _block_, _stream_);
+	down = std::make_shared<Downward>(wfld_hyper, slow_hyper, par, ref, _pool_down, "down", inj_src->data_vec, inj_src->data_vec, _grid_, _block_, _stream_);
+	up = std::make_shared<Upward>(wfld_hyper, slow_hyper, par, ref, _pool_up, "up", inj_src->data_vec, inj_src->data_vec, _grid_, _block_, _stream_);
 	reflect = std::make_shared<Reflect>(wfld_hyper, slow_hyper, inj_src->data_vec, inj_src->data_vec, _grid_, _block_, _stream_);
 
 	look_ahead = par->getInt("look_ahead", 1);
@@ -141,61 +142,52 @@ void Propagator::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> mo
 
 	int max_depth = ax[3].n;
 
- // Start with the first depth
- std::future<void> current_future = ref->sample_at_depth_async(model[0], 0);
+	// Start with the first depth
+	std::future<void> current_future = ref->sample_at_depth_async(model[0], 0);
+		
+	// Create a queue of futures for prefetched depths
+	std::queue<std::future<void>> future_queue;
 	
- // Create a queue of futures for prefetched depths
- std::queue<std::future<void>> future_queue;
- 
- // Prefetch initial depths based on look_ahead parameter
- for (int i = 1; i < std::min(look_ahead + 1, max_depth); i++) 
-	 future_queue.push(ref->sample_at_depth_async(model[0], i));
+	// Prefetch initial depths based on look_ahead parameter
+	for (int i = 1; i < std::min(look_ahead + 1, max_depth); i++) 
+		future_queue.push(ref->sample_at_depth_async(model[0], i));
 
- // Process all depths
- for (int iz = 0; iz < max_depth; iz++) {
-	 // Start sampling the next depth that needs sampling
-	int next_depth = iz + look_ahead + 1;
-	if (next_depth < max_depth)   // Only schedule if within bounds
-		future_queue.push(ref->sample_at_depth_async(model[0], next_depth));
+	// Process all depths
+	for (int iz = 0; iz < max_depth; iz++) {
+		// Start sampling the next depth that needs sampling
+		int next_depth = iz + look_ahead + 1;
+		if (next_depth < max_depth)   // Only schedule if within bounds
+			future_queue.push(ref->sample_at_depth_async(model[0], next_depth));
 
-	// Wait for current sampling to complete
-	current_future.wait();
+		// Wait for current sampling to complete
+		current_future.wait();
 
-	// Process current depth steps that don't need the sampled data
-	inj_src->set_depth(iz);
-	inj_src->cu_forward(true, inj_src->model_vec, down->data_vec);
-	
-	inj_rec->set_depth(iz);
-	inj_rec->cu_adjoint(true, this->data_vec, down->data_vec);
+		// Process current depth steps that don't need the sampled data
+		inj_src->set_depth(iz);
+		inj_src->cu_forward(true, inj_src->model_vec, down->data_vec);
+		
+		inj_rec->set_depth(iz);
+		inj_rec->cu_adjoint(true, this->data_vec, down->data_vec);
 
-	// Update current_future for the next iteration
-	if (!future_queue.empty()) {
-		current_future = std::move(future_queue.front());
-		future_queue.pop();
+		// Update current_future for the next iteration
+		if (!future_queue.empty()) {
+			current_future = std::move(future_queue.front());
+			future_queue.pop();
+		}
+
+		// Save amd propagate the wavefield
+		down->save_slice(iz, down->data_vec);
+		down->one_step_fwd(iz, down->data_vec);
 	}
-
-	// Save amd propagate the wavefield
-	down->compress_slice(iz, down->data_vec);
-	down->one_step_fwd(iz, down->data_vec);
- }
- 	
- 	down->wait_to_finish();
 
 	up->data_vec->zero();
 	// no need to sample reference slowness again as the RefSampler already holds all the refernce velocities
 	// up + reflect and record
  	wfld_slice_gpu->zero();
-	down->start_decompress_from_bottom();
 
 	for (int iz=ax[3].n-1; iz >= 0; --iz) {
 
-		std::shared_ptr<complex4DReg> down_wfld_host = down->get_next_wfld_slice();
-		
-		// Schedule the next decompression task to maintain the look-ahead window.
-		down->add_decompresss_from_bottom(iz);
-
-		// Asynchronously copy the decompressed data from host to GPU.
-		CHECK_CUDA_ERROR(cudaMemcpyAsync(wfld_slice_gpu->mat, down_wfld_host->getVals(), down->getDomainSizeInBytes(), cudaMemcpyHostToDevice, _stream_));
+		down->load_slice(iz, wfld_slice_gpu);
 
 		// Enqueue GPU work for the current slice `iz`.
 		up->one_step_fwd(iz, up->data_vec);
@@ -207,9 +199,8 @@ void Propagator::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> mo
 		inj_rec->cu_adjoint(true, this->data_vec, up->data_vec);
 
 		// Save the wavefield
-		up->compress_slice(iz, up->data_vec);
+		up->save_slice(iz, up->data_vec);
 	}
-	up->wait_to_finish();
 
 	CHECK_CUDA_ERROR(cudaMemcpyAsync(data->getVals(), this->data_vec->mat, getRangeSizeInBytes(), cudaMemcpyDeviceToHost, _stream_));
 

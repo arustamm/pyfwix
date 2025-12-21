@@ -46,12 +46,11 @@ public:
       throw std::runtime_error("Not implemented");
     };
 
-    std::pair<double, double> get_compression_ratio() {
-      std::pair<double, double> ratio;
-      ratio.first = down->get_compression_ratio();
-      ratio.second = up->get_compression_ratio();
-
-      return ratio;
+    std::pair<float, float> get_compression_ratio() {
+      std::pair<float, float> comp_size = {0.0f, 0.0f};
+      comp_size.first = down->get_compression_ratio();
+      comp_size.second = up->get_compression_ratio();
+      return comp_size;
     }
 
     std::shared_ptr<Downward> getDown() {return down;}
@@ -61,16 +60,15 @@ public:
     std::shared_ptr<Injection> getInjRec() {return inj_rec;}
     std::shared_ptr<hypercube> getWfldSliceHyper() {return wfld_hyper;}
     std::shared_ptr<RefSampler> getRefSampler() {return ref;}
-    std::shared_ptr<WavefieldPool> getWfldPool() {return wfld_pool;}
     std::string getRunId() { return _run_id; }
-
     complex_vector* get_wfld_slice_buffer() {return wfld_slice_gpu;}
 
 	
 
 protected:
     // Wavefield pool
-    std::shared_ptr<WavefieldPool> wfld_pool;
+    std::shared_ptr<WavefieldPool> _pool_down;
+    std::shared_ptr<WavefieldPool> _pool_up;
 
     // One-way propagators
     std::shared_ptr<Downward> down;
