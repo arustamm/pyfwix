@@ -5,10 +5,10 @@ import pyVector as Vec
 from typing import Tuple, Dict, Any
 from fwix import CudaWEM
 import genericIO
-from pyZarrVector import ZarrVector
+from dask.distributed import print
 import dask
-import logging
-import socket
+import uuid
+import os
 
 from fwix.utils import create_geometry, \
 	create_wavelet, create_data, get_axis, slice_sepvector, \
@@ -16,7 +16,7 @@ from fwix.utils import create_geometry, \
 
 def _obj_grad_worker(
 	df: pd.DataFrame,
-	model: Vec.superVector, 	# ZarrVector
+	model: Vec.superVector, 	
 	wavelet: pd.DataFrame,
 	prop_par,
 	shots_per_gpu: int,
@@ -30,18 +30,15 @@ def _obj_grad_worker(
 	"""
 	if len(df) == 0:
 		return pd.DataFrame({'norm_sq': [], 'grad': [], 'freq_id': []})
-	
-	logger = logging.getLogger("fwix.workers")
-	logger.setLevel(logging.INFO) # Ensure we capture info
-    
-	# Add Worker ID to logs to find bad hardware
-	worker_id = socket.gethostname()
-	log_prefix = f"[{worker_id} | Freq {freq_id}]"
 
 	# Initialize accumulators for this partition
 	norm_sq = 0.0
 	grad = model.clone().zero()
 	shot_col = geom_mapping['id']
+
+	df = df.sort_values(shot_col)
+	wavelet = wavelet.sort_index()
+
 	unique_shots = df[shot_col].unique()
 	padx = prop_par.get("ginsu_x", 0.0)
 	pady = prop_par.get("ginsu_y", 0.0)
@@ -52,9 +49,6 @@ def _obj_grad_worker(
 		batch_ids = unique_shots[i : i + shots_per_gpu]
 		df_batch = df[df[shot_col].isin(batch_ids)]
 		wav_batch = wavelet.loc[(freq_id, list(batch_ids)), :]
-		if np.isnan(df_batch['data'].iloc[0]).any():
-			logger.error(f"{log_prefix} FATAL: Input Data contains NaN for shots {batch_ids}")
-			return (freq_id, float('nan'), None)
 
 		# prepare geometry and model space
 		geometry = create_geometry(df_batch, geom_mapping)
@@ -63,21 +57,12 @@ def _obj_grad_worker(
 		local_den = slice_sepvector(model.vecs[1], slices)
 		local_model = Vec.superVector(local_slow, local_den)
 
-		min_s, max_s = local_slow.min(), local_slow.max()
-		if min_s <= 0 or np.isnan(min_s):
-			logger.error(f"{log_prefix} FATAL: Bad Slowness in slice. Min: {min_s}, Max: {max_s}")
-			return (freq_id, float('nan'), None)
-
 		# update the padding
 		prop_par["padx"] = local_slow.shape[-1]
 		prop_par["pady"] = local_slow.shape[-2]
 
 		time_axis = get_axis(wav_batch)
 		wav_vec = create_wavelet(wav_batch, time_axis)
-		wav_nrm = wav_vec.norm()
-		if wav_nrm == 0 or np.isnan(wav_nrm):
-			logger.error(f"{log_prefix} FATAL: Wavelet is silent or NaN. Norm: {wav_nrm}")
-			return (freq_id, float('nan'), None)
 		data = create_data(df_batch, time_axis)
 		
 		res = data.clone()
@@ -93,12 +78,6 @@ def _obj_grad_worker(
 			
 			# Forward Modeling: d_sim = F(m)
 			prop.forward(False, local_model, res) 
-
-			sim_norm = res.norm()
-			if np.isnan(sim_norm) or np.isinf(sim_norm):
-				logger.error(f"{log_prefix} EXPLOSION: Forward prop produced NaN/Inf. Shots: {batch_ids}")
-				# Optional: dump bad model slice to disk here for inspection
-				return (freq_id, float('nan'), None)
 
 			# Compute Residual: r = F(m) - d_obs
 			res.scaleAdd(data, 1.0, -1.0)
@@ -139,6 +118,10 @@ def _obj_worker(
 	# Initialize accumulators for this partition
 	norm_sq = 0.0
 	shot_col = geom_mapping['id']
+
+	df = df.sort_values(shot_col)
+	wavelet = wavelet.sort_index()
+
 	unique_shots = df[shot_col].unique()
 	padx = prop_par.get("ginsu_x", 0.0)
 	pady = prop_par.get("ginsu_y", 0.0)
@@ -154,9 +137,9 @@ def _obj_worker(
 		geometry = create_geometry(df_batch, geom_mapping)
 		slices = get_slices(geometry, model.vecs[0], padx, pady)
 		
-		time_axis = get_axis(wav_batch)
-		wav_vec = create_wavelet(wav_batch, time_axis)
-		data = create_data(df_batch, time_axis)
+		freq_axis = get_axis(wav_batch)
+		wav_vec = create_wavelet(wav_batch, freq_axis)
+		data = create_data(df_batch, freq_axis)
 		res = data.clone()
 		if wav_vec.norm() == 0:
 			raise ValueError("Wavelet vector has zero norm.")
@@ -243,30 +226,18 @@ def _extract_and_sum(item1, item2):
 
 def _io_load_and_compute(part_df, model_path, part_wav, prop_par, 
 						shots_per_gpu, stream_batches, geom_map, freq_id,
-						compute_grad=True):
+						compute_grad=True, grad_tmp_dir=None):
 	"""
 	Worker wrapper that loads the velocity model from Disk (Scratch)
 	instead of receiving it over the network.
 	"""
 	# 1. Load the Velocity Model from the shared filesystem
-	# genericIO handles reading SepVectors (.H files) efficiently
-	slow = genericIO.defaultIO.getVector(model_path[0])
-	den = genericIO.defaultIO.getVector(model_path[1])
+	slow = safe_load_pickle(model_path[0])
+	den = safe_load_pickle(model_path[1])
 	slow_den = Vec.superVector(slow, den)
 
     # 2. Run the original worker logic
-	if compute_grad:
-		return _obj_grad_worker(
-			part_df, 
-			slow_den, 
-			part_wav, 
-			prop_par, 
-			shots_per_gpu, 
-			stream_batches, 
-			geom_map, 
-			freq_id
-		)
-	else:
+	if not compute_grad:
 		return _obj_worker(
 			part_df, 
 			slow_den, 
@@ -278,3 +249,205 @@ def _io_load_and_compute(part_df, model_path, part_wav, prop_par,
 			freq_id
 		)
 	
+	else:
+		if grad_tmp_dir is None:
+			raise ValueError("grad_tmp_dir must be specified when compute_grad = True.")
+		
+		freq_id, norm_sq, grad = _obj_grad_worker(
+								part_df, 
+								slow_den, 
+								part_wav, 
+								prop_par, 
+								shots_per_gpu, 
+								stream_batches, 
+								geom_map, 
+								freq_id
+							)
+		out_paths = []
+		unique_suffix = uuid.uuid4().hex
+		# Loop over components (e.g., 0=Slow, 1=Den)
+		for i, comp_vec in enumerate(grad.vecs):
+			# Create explicit filename for this component
+			fname = f"grad_freq{freq_id}_comp{i}_{unique_suffix}.pkl"
+			path = os.path.join(grad_tmp_dir, fname)
+			
+			# Write just this component
+			with open(path, 'wb') as f:
+				pickle.dump(comp_vec, f, protocol=pickle.HIGHEST_PROTOCOL)
+			out_paths.append(path)
+
+		# Cleanup
+		del grad, slow, den
+		
+		# Return LIST of paths: [path_slow, path_den]
+		return (freq_id, norm_sq, out_paths)
+		
+def _sum_gradients_on_disk(file_list, output_path):
+	"""
+	Reads a list of .H files and sums them into one.
+	"""
+	if not file_list:
+		return None
+		
+	# Read the first file to initialize sum
+	total_vec = safe_load_pickle(file_list[0])
+
+	# Loop and accumulate
+	# Efficient strategy: Read into a temp buffer and add
+	for path in file_list[1:]:
+		temp_vec = safe_load_pickle(path)
+		total_vec.scaleAdd(temp_vec, 1.0, 1.0)
+		
+	# Write the final result
+	with open(output_path, 'wb') as f:
+		pickle.dump(total_vec, f, protocol=pickle.HIGHEST_PROTOCOL)
+	return output_path
+	
+def _born_worker(
+	df: pd.DataFrame,
+	model: Vec.superVector,     # Background model (m)
+	dmodel: Vec.superVector,    # Search direction (dm)
+	wavelet: pd.DataFrame,
+	prop_par: Dict[str, Any],
+	shots_per_gpu: int,
+	gpu_stream_batches: Tuple[int],
+	geom_mapping: Dict[str, str],
+	freq_id: int
+	) -> Tuple[float, float]:
+	"""
+	Computes (res . born_data) and (born_data . born_data) for a partition.
+	"""
+	if len(df) == 0:
+		return 0.0, 0.0
+
+	dot_res_dres = 0.0
+	dot_dres_dres = 0.0
+
+	shot_col = geom_mapping['id']
+	df = df.sort_values(shot_col)
+	wavelet = wavelet.sort_index()
+
+	unique_shots = df[shot_col].unique()
+
+	# Slice parameters
+	padx = prop_par.get("ginsu_x", 0.0)
+	pady = prop_par.get("ginsu_y", 0.0)
+
+	try:
+		for i in range(0, len(unique_shots), shots_per_gpu):
+			batch_ids = unique_shots[i : i + shots_per_gpu]
+			df_batch = df[df[shot_col].isin(batch_ids)]
+			wav_batch = wavelet.loc[(freq_id, list(batch_ids)), :]
+
+			# 1. Geometry and Slicing
+			geometry = create_geometry(df_batch, geom_mapping)
+			slices = get_slices(geometry, model.vecs[0], padx, pady)
+			
+			# Slice Background Model
+			local_slow = slice_sepvector(model.vecs[0], slices)
+			local_den = slice_sepvector(model.vecs[1], slices)
+			local_model = Vec.superVector(local_slow, local_den)
+
+			# Slice Search Direction (dmodel)
+			local_dslow = slice_sepvector(dmodel.vecs[0], slices)
+			local_dden = slice_sepvector(dmodel.vecs[1], slices)
+			local_dmodel = Vec.superVector(local_dslow, local_dden)
+
+			# 2. Setup Vectors
+			time_axis = get_axis(wav_batch)
+			wav_vec = create_wavelet(wav_batch, time_axis)
+			data = create_data(df_batch, time_axis)
+			
+			# Vectors for results
+			res = data.clone()  # Non-linear modeled data (will become residual)
+			dres = data.clone() # Linearized modeled data (Born response)
+
+			# Update padding for CudaWEM
+			prop_par["padx"] = local_slow.shape[-1]
+			prop_par["pady"] = local_slow.shape[-2]
+			par = genericIO.pythonParams(prop_par)
+
+			try:
+				# 3. Initialize Propagator
+				prop = CudaWEM.Propagator(
+					local_model, res, wav_vec, 
+					par, geometry, nbatches=gpu_stream_batches
+				)
+				# Initialize Born Operator
+				# Born takes: (model_pert, data_pert, background_model, propagator)
+				born = CudaWEM.ExtendedBorn(local_dmodel, dres, local_model, prop)
+
+				# 4. Compute Non-Linear Residual: r = F(m) - d_obs
+				prop.forward(False, local_model, res)
+				res.scaleAdd(data, 1.0, -1.0) 
+
+				# 5. Compute Linearized Residual: dr = J * dm
+				born.forward(False, local_dmodel, dres)
+
+				# 6. Accumulate Dot Products (Real parts only)
+				dot_res_dres += res.dot(dres)
+				dot_dres_dres += dres.dot(dres)
+
+			finally:
+				del prop, born, data, wav_vec, res, dres, local_model, local_dmodel
+				gc.collect()
+	except Exception as e:
+		import traceback
+		print(f"WORKER ERROR (Freq {freq_id}): {str(e)}")
+		traceback.print_exc()
+		raise e
+
+	return dot_res_dres, dot_dres_dres
+
+def _io_load_and_compute_born(part_df, model_path, dmodel_path, part_wav, prop_par, 
+                              shots_per_gpu, stream_batches, geom_map, freq_id):
+    """
+    IO Wrapper: Loads both background model and search direction from scratch.
+    """
+    # Load Background
+    slow = safe_load_pickle(model_path[0])
+    den = safe_load_pickle(model_path[1])
+    model = Vec.superVector(slow, den)
+
+    # Load Search Direction
+    dslow = safe_load_pickle(dmodel_path[0])
+    dden = safe_load_pickle(dmodel_path[1])
+    dmodel = Vec.superVector(dslow, dden)
+
+    # Run computation
+    res_dres, dres_dres = _born_worker(
+        part_df, model, dmodel, part_wav, prop_par,
+        shots_per_gpu, stream_batches, geom_map, freq_id
+    )
+
+    del model, dmodel, slow, den, dslow, dden
+    return res_dres, dres_dres
+
+import time
+import pickle
+def safe_load_pickle(filepath, retries=3):
+	# 1. Wait for file to appear (Metadata Consistency)
+	for i in range(retries):
+		if os.path.exists(filepath):
+			break
+		time.sleep(1.0)
+		
+	if not os.path.exists(filepath):
+		# Debug info if missing
+		parent = os.path.dirname(filepath)
+		try:
+			print(f"DEBUG: {parent} contents: {os.listdir(parent)}")
+		except:
+			print(f"DEBUG: {parent} does not exist.")
+		raise FileNotFoundError(f"Worker could not find pickle file: {filepath}")
+
+	# 2. Load
+	try:
+		with open(filepath, 'rb') as f:
+			vec = pickle.load(f)
+		return vec
+	except EOFError:
+		# Handle partial writes (rare but possible if client crashes)
+		raise RuntimeError(f"Corrupt (empty) pickle file: {filepath}")
+	except Exception as e:
+		raise RuntimeError(f"Failed to load pickle {filepath}: {e}")

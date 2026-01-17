@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.19)
+
+if(NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86;89;90") 
+endif()
+
 project(fwix LANGUAGES C CXX CUDA)
 
 # Common settings
@@ -8,17 +13,20 @@ set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 set(CMAKE_INCLUDE_CURRENT_DIR TRUE)
 
 include(FetchContent)
-
 FetchContent_Declare(
-  cuSZp
-  GIT_REPOSITORY https://github.com/szcompressor/cuSZp.git
-  GIT_TAG        6ab90a5  
+  zfp
+  GIT_REPOSITORY https://github.com/LLNL/zfp.git
+  GIT_TAG        1.0.1 
 )
 
-# This downloads cuSZp and runs its CMakeLists.txt
-# It effectively adds it as a sub-project.
-FetchContent_MakeAvailable(cuSZp)
-include_directories(${cuSZp_SOURCE_DIR}/include)
+# FORCE ZFP options before fetching
+set(ZFP_WITH_CUDA ON CACHE BOOL "" FORCE)
+set(CMAKE_CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES} CACHE STRING "" FORCE)
+
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(zfp)
 
 # Find common dependencies once to avoid version conflicts
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
@@ -63,8 +71,8 @@ set_target_properties(pyFWIX PROPERTIES
 target_link_libraries(pyFWIX PRIVATE
     genericCpp sepVector hypercube
     jsonCpp sep3d sep
-    CUDA::cudart_static CUDA::cufft_static cuSZp_static
-    ${OpenCV_LIBS} tbb
+    CUDA::cudart_static CUDA::cufft_static zfp::zfp 
+    ${OpenCV_LIBS} TBB::tbb
     pybind11::module Python::Module
 )
 
@@ -75,6 +83,8 @@ fwix/CudaWEM.py
 fwix/FWIXmodeling.py 
 fwix/FWIXProblem.py 
 fwix/utils.py 
+fwix/workers.py
+fwix/sep3d.py
 )
 
 install(TARGETS pyFWIX DESTINATION fwix)

@@ -7,7 +7,7 @@ dim3 grid, dim3 block, cudaStream_t stream)
 : CudaOperator<complex4DReg, complex4DReg>(domain, domain, model, data, grid, block, stream) {
   // create plan  
 
-  _block_ = {16, 16, 4};
+  _block_ = {8, 8, 4};
   _grid_.x = (domain->getAxis(1).n + _block_.x - 1) / _block_.x;
   _grid_.y = (domain->getAxis(2).n + _block_.y - 1) / _block_.y;
   _grid_.z = (domain->getAxis(3).n*domain->getAxis(4).n + _block_.z - 1) / _block_.z;
@@ -37,36 +37,24 @@ dim3 grid, dim3 block, cudaStream_t stream)
 // this is on-device function
 void cuFFT2d::cu_forward(bool add, complex_vector* __restrict__ model, complex_vector* __restrict__ data) {
   if (!add) data->zero();
-  CHECK_CUDA_ERROR(cudaMemPrefetchAsync(model, sizeof(complex_vector), cudaCpuDeviceId, _stream_)); 
-  CHECK_CUDA_ERROR(cudaMemPrefetchAsync(data, sizeof(complex_vector), cudaCpuDeviceId, _stream_)); 
   cufftExecC2C(plan, model->mat, temp->mat, CUFFT_FORWARD);
-  // CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_));
-  // temp->scale(scale);
   data->add(temp);
 };
 
 // this is on-device function
 void cuFFT2d::cu_adjoint(bool add, complex_vector* __restrict__ model, complex_vector* __restrict__ data) {
   if (!add) model->zero();
-  CHECK_CUDA_ERROR(cudaMemPrefetchAsync(model, sizeof(complex_vector), cudaCpuDeviceId, _stream_)); 
-  CHECK_CUDA_ERROR(cudaMemPrefetchAsync(data, sizeof(complex_vector), cudaCpuDeviceId, _stream_)); 
   cufftExecC2C(plan, data->mat, temp->mat, CUFFT_INVERSE);
-  // CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_));
-  // temp->scale(scale);
   model->add(temp);
 };
 
 // this is on-device function
 void cuFFT2d::cu_forward(__restrict__ complex_vector* data) {
   cufftExecC2C(plan, data->mat, data->mat, CUFFT_FORWARD);
-  // CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_));
-  // data->scale(scale);
 };
 
 // this is on-device function
 void cuFFT2d::cu_adjoint(__restrict__ complex_vector* data) {
   cufftExecC2C(plan, data->mat, data->mat, CUFFT_INVERSE);
-  // CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream_));
-  // data->scale(scale);
 };
 

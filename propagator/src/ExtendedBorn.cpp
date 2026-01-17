@@ -23,8 +23,8 @@ CudaOperator<complex4DReg, complex2DReg>(domain, range, grid, block, stream) {
   _den = slow_den[1];
   auto m_ax = _slow->getHyper()->getAxes();
 
-  CHECK_CUDA_ERROR(cudaHostRegister(_slow->getVals(), _slow->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
-  CHECK_CUDA_ERROR(cudaHostRegister(_den->getVals(), _den->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
+  // CHECK_CUDA_ERROR(cudaHostRegister(_slow->getVals(), _slow->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
+  // CHECK_CUDA_ERROR(cudaHostRegister(_den->getVals(), _den->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
 
   auto run_id = propagator->getRunId();
   run_id.insert(0, "extended_born_");
@@ -59,9 +59,9 @@ CudaOperator<complex4DReg, complex2DReg>(domain, range, grid, block, stream) {
   back_scattering = std::make_shared<BackScattering>(subhyper5d, wfld_hyper, slow_den, bg_down, dmodel, inj_rec->data_vec, grid, block, stream);
 
   local_data = std::make_shared<complex2DReg>(range);
-  CHECK_CUDA_ERROR(cudaHostRegister(local_data->getVals(), getRangeSizeInBytes(), cudaHostRegisterDefault));
-  CHECK_CUDA_ERROR(cudaHostRegister(hslow->getVals(), hslow->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
-  CHECK_CUDA_ERROR(cudaHostRegister(hmodel->getVals(), hmodel->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
+  // CHECK_CUDA_ERROR(cudaHostRegister(local_data->getVals(), getRangeSizeInBytes(), cudaHostRegisterDefault));
+  // CHECK_CUDA_ERROR(cudaHostRegister(hslow->getVals(), hslow->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
+  // CHECK_CUDA_ERROR(cudaHostRegister(hmodel->getVals(), hmodel->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
 };
 
 size_t ExtendedBorn::getSliceSize() const {
@@ -80,8 +80,8 @@ void ExtendedBorn::set_background_model(std::vector<std::shared_ptr<complex4DReg
 
 void ExtendedBorn::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> model, std::shared_ptr<complex2DReg> data) {
 
-  CHECK_CUDA_ERROR(cudaHostRegister(model[0]->getVals(), model[0]->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
-  CHECK_CUDA_ERROR(cudaHostRegister(model[1]->getVals(), model[1]->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
+  // CHECK_CUDA_ERROR(cudaHostRegister(model[0]->getVals(), model[0]->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
+  // CHECK_CUDA_ERROR(cudaHostRegister(model[1]->getVals(), model[1]->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
 
   // always zero out the internal data_vec that records the data
 	_propagator->data_vec->zero();
@@ -103,8 +103,8 @@ void ExtendedBorn::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> 
   );
 
     // unpin the memory
-  CHECK_CUDA_ERROR(cudaHostUnregister(model[0]->getVals()));
-  CHECK_CUDA_ERROR(cudaHostUnregister(model[1]->getVals()));
+  // CHECK_CUDA_ERROR(cudaHostUnregister(model[0]->getVals()));
+  // CHECK_CUDA_ERROR(cudaHostUnregister(model[1]->getVals()));
 
 }
 
@@ -112,7 +112,7 @@ void ExtendedBorn::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> 
 
 void ExtendedBorn::adjoint(bool add, std::vector<std::shared_ptr<complex4DReg>> model, std::shared_ptr<complex2DReg> data) {
 
-  CHECK_CUDA_ERROR(cudaHostRegister(data->getVals(), getRangeSizeInBytes(), cudaHostRegisterDefault));
+  // CHECK_CUDA_ERROR(cudaHostRegister(data->getVals(), getRangeSizeInBytes(), cudaHostRegisterDefault));
   CHECK_CUDA_ERROR(cudaMemcpyAsync(_propagator->data_vec->mat, data->getVals(), getRangeSizeInBytes(), cudaMemcpyHostToDevice, _stream_));
 
   // zero out the wavefield
@@ -125,7 +125,7 @@ void ExtendedBorn::adjoint(bool add, std::vector<std::shared_ptr<complex4DReg>> 
   backward_scattering_adj(model);
 
     // unpin the memory
-  CHECK_CUDA_ERROR(cudaHostUnregister(data->getVals()));
+  // CHECK_CUDA_ERROR(cudaHostUnregister(data->getVals()));
 
 }
 

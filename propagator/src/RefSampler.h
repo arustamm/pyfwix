@@ -22,8 +22,8 @@ class RefSampler
 		RefSampler(const std::shared_ptr<complex4DReg>& slow, std::shared_ptr<paramObj> par);
 
 		~RefSampler() {
-			CHECK_CUDA_ERROR(cudaHostUnregister(slow_ref.data()));
-			CHECK_CUDA_ERROR(cudaHostUnregister(ref_labels.data()));
+			// CHECK_CUDA_ERROR(cudaHostUnregister(slow_ref.data()));
+			// CHECK_CUDA_ERROR(cudaHostUnregister(ref_labels.data()));
 		}
 
 		inline std::complex<float>* get_ref_slow(size_t iz, size_t iref) {

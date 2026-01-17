@@ -21,8 +21,19 @@ public:
         const std::vector<int>& num_batches = {1, 1});
 
     ~StreamingPropagator() {
+        // 1. Sync streams (ensure GPU is idle)
         for (auto& stream : streams) {
-            CHECK_CUDA_ERROR(cudaStreamDestroy(stream));
+            cudaStreamSynchronize(stream);
+        }
+        
+        // 2. Free GPU memory while context is valid
+        propagators.clear();  // Calls ~Propagator() cleanly
+        model_batches.clear();
+        data_batches.clear();
+        
+        // 3. Destroy streams last
+        for (auto& stream : streams) {
+            cudaStreamDestroy(stream);
         }
     }
 

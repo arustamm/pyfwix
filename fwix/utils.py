@@ -8,7 +8,8 @@ import SepVector
 import Hypercube
 import gc
 import dask.array as da
-import zarr
+from pyVector import superVector
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import numpy as np
@@ -19,6 +20,7 @@ import SepVector
 import Hypercube
 import genericIO
 import gc
+from scipy.ndimage import gaussian_filter
 
 from typing import Tuple, Any, Dict
 
@@ -51,7 +53,7 @@ def create_geometry(df: pd.DataFrame, geom_mapping: Dict[str, str]) -> dict:
     rx = df[geom_mapping['rx']].values.astype(np.float32)
     ry = df[geom_mapping['ry']].values.astype(np.float32)
     rz = df[geom_mapping['rz']].values.astype(np.float32)
-    r_ids = df[geom_mapping['id']].values.astype(np.float32)
+    r_ids = df[geom_mapping['id']].values.astype(np.int32)
 
     df_shots_unique = df.drop_duplicates(subset=[geom_mapping['id']], keep='first')
     sx = df_shots_unique[geom_mapping['sx']].values.astype(np.float32)
@@ -81,6 +83,8 @@ def create_data(df_batch: pd.DataFrame, axis) -> SepVector.vector:
     vec = SepVector.getSepVector(hyper, storage='dataComplex')
     if 'data' in df_batch.columns:
         traces = np.stack(np.asarray(df_batch['data'].values))
+        if traces.shape != vec.shape:
+            raise ValueError(f"Data shape mismatch: expected {vec.shape}, got {traces.shape}")
         vec[:] = traces
 
     return vec
@@ -151,7 +155,7 @@ def sepvector_to_zarr(svec: SepVector.vector, path, temp_dir='/tmp/',
     zvec[:] = svec[:]
     return zvec
 
-def get_slices(geometry, slowness, pad_x, pad_y):
+def get_slices(geometry, slowness, padx, pady):
     """
     Calculates the bounding box for shots/receivers and extracts 
     the local model window and shifted geometry.
@@ -163,23 +167,16 @@ def get_slices(geometry, slowness, pad_x, pad_y):
     
     miny = min(geometry['sy'].min(), geometry['ry'].min())
     maxy = max(geometry['sy'].max(), geometry['ry'].max())
-
-    # 2. Add Padding (Aperture)
-    xlen = maxx - minx
-    ylen = maxy - miny
-    padx = xlen + pad_x
-    pady = ylen + pad_y
     
-    # Clip to model boundaries
-    # Assuming origin is 0,0 for simplicity, use slowness.os to be precise
     axes = slowness.getHyper().axes
     ox, oy, of, oz = [ax.o for ax in axes]
     dx, dy, df, dz = [ax.d for ax in axes]
     nx, ny, nf, nz = [ax.n for ax in axes]
-    
+
     limitx = ox + (nx-1) * dx
     limity = oy + (ny-1) * dy
 
+    # Add Padding (Aperture)
     startx = max(ox, minx - padx)
     endx   = min(limitx, maxx + padx)
     
@@ -208,9 +205,6 @@ def get_slices(geometry, slowness, pad_x, pad_y):
     return slices
 
 def prepare_extended_model(model, nf, of, df, pad_z=0) -> ZarrVector:
-    """
-    Fully lazy version - never materializes the full array in memory.
-    """
     if of == 0:
         raise ValueError("Cannot run zero frequency!")
     
@@ -224,11 +218,11 @@ def prepare_extended_model(model, nf, of, df, pad_z=0) -> ZarrVector:
     model_padded = np.pad(
         model[:],
         pad_width=((0, 0), (0, 0), (n_pad, 0)),
-        mode='constant',
-        constant_values=1.5
+        mode='edge',
+        # constant_values=1.5
     )
     
-    # 3. Lazy transpose: (nz, ny, nx+n_pad) -> (nz+n_pad, ny, nx)
+    # 3. (nz, ny, nx+n_pad) -> (nz+n_pad, ny, nx)
     transposed = np.transpose(model_padded, (2, 0, 1))
     
     # 4. Lazy compute 1/v^2
@@ -250,3 +244,155 @@ def prepare_extended_model(model, nf, of, df, pad_z=0) -> ZarrVector:
     ext_model[:] = extended[:]
 
     return ext_model
+
+import concurrent.futures
+import numpy as np
+import SepVector
+from pyVector import superVector
+from scipy.ndimage import gaussian_filter
+
+def create_split_model(slow_full: SepVector.vector, den_full: SepVector.vector, n_splits: int):
+    """
+    Splits monolithic 4D Slowness and Density vectors into a 
+    SuperVector of SuperVectors based on frequency bands.
+    Parallelized version.
+    """
+    # 1. Inspect Geometry
+    hyp = slow_full.getHyper()
+    axes = hyp.axes
+    
+    nx, ny, nf, nz = axes[0].n, axes[1].n, axes[2].n, axes[3].n
+    dx, dy, df, dz = axes[0].d, axes[1].d, axes[2].d, axes[3].d
+    ox, oy, of, oz = axes[0].o, axes[1].o, axes[2].o, axes[3].o
+
+    n_band = nf // n_splits
+    
+    # Get Numpy Views (Shape: nz, nf, ny, nx)
+    slow_arr = slow_full.getNdArray()
+    den_arr = den_full.getNdArray()
+
+    print(f"Splitting model with {nf} freqs into {n_splits} bands (Parallel)...")
+
+    # --- Worker Function ---
+    def _split_worker(i):
+        # A. Calculate Indices
+        idx_start = i * n_band
+        if i == n_splits - 1:
+            idx_end = nf
+        else:
+            idx_end = idx_start + n_band
+            
+        current_nf = idx_end - idx_start
+        current_of = of + (idx_start * df)
+        
+        # B. Define Hypercube for this Band
+        band_ns = [nx, ny, current_nf, nz]
+        band_ds = [dx, dy, df, dz]
+        band_os = [ox, oy, current_of, oz]
+        
+        # C. Create SepVectors
+        s_vec = SepVector.getSepVector(
+            ns=band_ns, ds=band_ds, os=band_os, 
+            storage='dataComplex'
+        )
+        d_vec = SepVector.getSepVector(
+            ns=band_ns, ds=band_ds, os=band_os, 
+            storage='dataComplex'
+        )
+        
+        # D. Fill Data (Copy from Monolithic)
+        # Note: Concurrent reads from slow_arr/den_arr are safe
+        s_vec[:] = slow_arr[:, idx_start:idx_end, :, :]
+        d_vec[:] = den_arr[:, idx_start:idx_end, :, :]
+        
+        # E. Return the SuperVector for this band
+        return superVector(s_vec, d_vec)
+
+    # --- Execution ---
+    # Use max_workers=n_splits to do it all at once if memory allows
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_splits) as executor:
+        # Submit all tasks. We map indices 0..n_splits-1
+        # We store the index 'i' in the map so we know where to put the result
+        futures = {executor.submit(_split_worker, i): i for i in range(n_splits)}
+        
+        # Prepare the list with empty slots to ensure correct ordering
+        band_supervectors = [None] * n_splits
+        
+        for future in concurrent.futures.as_completed(futures):
+            idx = futures[future]
+            try:
+                result = future.result()
+                band_supervectors[idx] = result
+            except Exception as e:
+                print(f"Split {idx} generated an exception: {e}")
+                raise e
+
+    # F. Create Master SuperVector (unpacked in correct order)
+    final_model = superVector(*band_supervectors)
+    return final_model
+
+
+def create_grad_mask(model: SepVector.vector, zeros: float, sigma=3.0):
+    """
+    Applies Gaussian taper to water layer in parallel across model splits.
+    Input 'model' is expected to be the SuperVector of splits created above.
+    """
+    mask = model.clone()
+    mask.set(1.)
+    
+    # Helper to calculate nzeros once (assuming all splits have same dz)
+    # Peek at the first component of the first split
+    first_split = mask.vecs[0] # This is a SuperVector(Slow, Den)
+    first_comp = first_split.vecs[0] # This is the Slowness SepVector
+    dz = first_comp.getHyper().axes[-1].d # Axis 3 is Z (in Python [X,Y,F,Z])
+    nzeros = int(zeros / dz)
+
+    # --- Worker Function ---
+    def _mask_worker(split_idx, split_sv):
+        """
+        Process one frequency band (SuperVector containing Slow and Den)
+        """
+        
+        # split_sv is a SuperVector([Slow, Den])
+        # vec[0] is Slowness, vec[1] is Density
+        
+        # Apply to Slowness
+        slow = split_sv.vecs[0].getNdArray()
+        slow[:nzeros, ...] = 0.
+        slow[:] = gaussian_filter(slow, sigma=sigma, axes=0)
+        
+        # Apply to Density
+        den = split_sv.vecs[1].getNdArray()
+        den[:nzeros, ...] = 0.
+        den[:] = gaussian_filter(den, sigma=sigma, axes=0)
+        
+        return split_idx
+
+    # --- Execution ---
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(mask.vecs)) as executor:
+        # mask.vecs contains the list of splits (SuperVectors)
+        futures = []
+        for i, split_sv in enumerate(mask.vecs):
+            futures.append(executor.submit(_mask_worker, i, split_sv))
+            
+        for future in concurrent.futures.as_completed(futures):
+            # Just check for exceptions, modification happens in-place
+            try:
+                _ = future.result()
+            except Exception as e:
+                print(f"Masking failed on split: {e}")
+                raise e
+    
+    return mask, nzeros
+    
+    mask = model.clone()
+    mask.set(1.)
+    for vec in mask.vecs:
+        dz = vec[0].getHyper().axes[-1].d
+        nzeros = int(zeros / dz)
+        vec[0][:nzeros, ...] = 0.
+        vec[1][:nzeros, ...] = 0.
+        vec[0][:] = gaussian_filter(vec[0][:], sigma=sigma, axes=0)
+        vec[1][:] = gaussian_filter(vec[1][:], sigma=sigma, axes=0)
+    
+    return mask, nzeros

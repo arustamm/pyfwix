@@ -153,14 +153,8 @@ __global__ void ps_adjoint(complex_vector* __restrict__ model, complex_vector* _
         a = w2[iw]*sre - (kx[ix]*kx[ix] + ky[iy]*ky[iy]);
         b = w2[iw]*(sim-eps*sre);
         c = sqrtf(a*a + b*b);
-        if (b <= 0) {
-          re = sqrtf((c+a)/2);
-          im = -sqrtf((c-a)/2);
-        }
-        else {
-          re = -sqrtf((c+a)/2);
-				  im = -sqrtf((c-a)/2);
-        }
+        re = sqrtf((c+a)/2);
+        im = -sqrtf((c-a)/2);
 
         float att = exp(im*dz);
         float coss;
@@ -274,15 +268,8 @@ __global__ void ps_inverse(complex_vector* __restrict__ model, complex_vector* _
         a = w2[iw]*sre - (kx[ix]*kx[ix] + ky[iy]*ky[iy]);
         b = w2[iw]*(sim-eps*sre);
         c = sqrtf(a*a + b*b);
-        if (b <= 0) {
           re = sqrtf((c+a)/2);
           im = sqrtf((c-a)/2);
-        }
-        else {
-          re = -sqrt((c+a)/2);
-				  im = sqrt((c-a)/2);
-        }
-
           // convert 4d index to flat index
           int nd_ind[] = {is, iw, iy, ix};
           flat_ind = ND_TO_FLAT(nd_ind, dims);

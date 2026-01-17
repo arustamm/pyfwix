@@ -29,8 +29,8 @@ RefSampler::RefSampler(std::shared_ptr<hypercube> slow_hyper, std::shared_ptr<pa
 
 	is_sampled.resize(_nz_);
 
-	CHECK_CUDA_ERROR(cudaHostRegister(slow_ref.data(), sizeof(std::complex<float>)*slow_ref.num_elements(), cudaHostRegisterDefault));
-	CHECK_CUDA_ERROR(cudaHostRegister(ref_labels.data(), sizeof(int)*ref_labels.num_elements(), cudaHostRegisterDefault));
+	// CHECK_CUDA_ERROR(cudaHostRegister(slow_ref.data(), sizeof(std::complex<float>)*slow_ref.num_elements(), cudaHostRegisterDefault));
+	// CHECK_CUDA_ERROR(cudaHostRegister(ref_labels.data(), sizeof(int)*ref_labels.num_elements(), cudaHostRegisterDefault));
 };
 
 RefSampler::RefSampler(const std::shared_ptr<complex4DReg>& slow, std::shared_ptr<paramObj> par) : RefSampler(slow->getHyper(), par) {

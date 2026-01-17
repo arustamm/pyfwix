@@ -11,7 +11,7 @@ Injection::Injection(const std::shared_ptr<hypercube>& domain,const std::shared_
   this->dz = dz;
   
   // _grid_ = {32, 16};
-  _block_ = {16, 16};
+  _block_ = {8, 8};
   _grid_.x = (domain->getAxis(1).n + _block_.x - 1) / _block_.x;
   _grid_.y = (domain->getAxis(2).n + _block_.y - 1) / _block_.y;
 

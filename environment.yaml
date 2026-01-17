@@ -7,7 +7,6 @@ dependencies:
   - cuda-toolkit
   - cuda-nvcc
   - libopencv
-  - zfp
 
   - python=3.11
   - compilers
@@ -45,9 +44,6 @@ dependencies:
   - distributed==2025.1.0
   - dask-labextension
   - zarr
-  - rapidsai:
-      - ucx
-      - ucx-py
 
   - holoviews
   - jupyterlab

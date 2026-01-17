@@ -59,7 +59,7 @@ public:
 
   float get_compression_ratio() {
     size_t comp_size = _wfld_pool->get_compressed_size();
-    size_t orig_size = getDomainSizeInBytes();
+    size_t orig_size = getDomainSizeInBytes() * m_ax[3].n;
     return static_cast<float>(orig_size) / static_cast<float>(comp_size);
   }
 

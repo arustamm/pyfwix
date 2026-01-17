@@ -2,7 +2,7 @@
 #include <CudaOperator.h>
 #include <complex4DReg.h>
 #include <paramObj.h>
-#include <cuSZp.h>
+#include <zfp.h>
 #include <vector>
 #include <mutex>
 #include <cstring> // for std::memcpy
@@ -65,4 +65,10 @@ private:
     // This matches 'cmpSize1' in the example, but allocated as pinned
     // so the GPU can write to it and CPU can read it.
     size_t* _cmpSize; 
+
+    zfp_stream* _zstream = nullptr;
+    zfp_field* _zfield  = nullptr;
+    bitstream* _bstream = nullptr;
+    
+    size_t _compressed_size_bytes = 0;
 };

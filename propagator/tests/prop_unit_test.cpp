@@ -421,7 +421,7 @@ class Propagator_Test : public testing::Test {
 
      auto sources = traces->clone();
      sources->random();
-     sources->set(1.f);
+     sources->set(100.f);
 
      auto slow4d = std::make_shared<complex4DReg>(nx, ny, nw, nz);
      slow4d->set(1.f);
@@ -461,6 +461,7 @@ class Propagator_Test : public testing::Test {
     root["pady"] = ny;
     root["taperx"] = 10;
     root["tapery"] = 10;
+    root["compress_rate"] = 4.0;
     auto par = std::make_shared<jsonParamObj>(root);
      
      prop = std::make_unique<Propagator>(domain, domain, 

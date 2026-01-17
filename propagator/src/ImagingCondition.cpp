@@ -13,7 +13,7 @@ ImagingCondition::ImagingCondition(
 CudaOperator<complex3DReg, complex4DReg>(domain, range, model, data, grid, block, stream) ,
 _oneway(oneway)	{
 	
-  	_block_ = {16, 16, 4};
+  	_block_ = {8, 8, 4};
 	_grid_.x = (range->getAxis(1).n + _block_.x - 1) / _block_.x;
 	_grid_.y = (range->getAxis(2).n + _block_.y - 1) / _block_.y;
 	_grid_.z = (range->getAxis(3).n*range->getAxis(4).n + _block_.z - 1) / _block_.z;

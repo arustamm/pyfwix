@@ -28,11 +28,11 @@ public:
       CHECK_CUDA_ERROR(cudaFree(dmodel));
       dslow->~complex_vector();
       CHECK_CUDA_ERROR(cudaFree(dslow));
-      CHECK_CUDA_ERROR(cudaHostUnregister(_slow->getVals()));
-      CHECK_CUDA_ERROR(cudaHostUnregister(_den->getVals()));
-      CHECK_CUDA_ERROR(cudaHostUnregister(local_data->getVals()));
-      CHECK_CUDA_ERROR(cudaHostUnregister(hslow->getVals()));
-      CHECK_CUDA_ERROR(cudaHostUnregister(hmodel->getVals()));
+    //   CHECK_CUDA_ERROR(cudaHostUnregister(_slow->getVals()));
+    //   CHECK_CUDA_ERROR(cudaHostUnregister(_den->getVals()));
+    //   CHECK_CUDA_ERROR(cudaHostUnregister(local_data->getVals()));
+    //   CHECK_CUDA_ERROR(cudaHostUnregister(hslow->getVals()));
+    //   CHECK_CUDA_ERROR(cudaHostUnregister(hmodel->getVals()));
     };
 
     // Forward operator: extended Born modeling

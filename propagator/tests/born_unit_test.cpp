@@ -382,7 +382,7 @@ protected:
 		root["pady"] = ax[1].n;
 		root["taperx"] = 0;
 		root["tapery"] = 0;
-		root["compress_error"] = 0.0;
+		root["compress_rate"] = 32.0;
 		auto par = std::make_shared<jsonParamObj>(root);
 
 		auto prop = std::make_shared<Propagator>(

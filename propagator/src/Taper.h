@@ -16,8 +16,7 @@ public:
 		tapx = par->getInt("taperx", 0);
 		tapy = par->getInt("tapery", 0);
 
-		// _grid_ = {32, 4, 4};
-		_block_ = {16, 16, 4};
+		_block_ = {8, 8, 4};
 
 		_grid_.x = (domain->getAxis(1).n + _block_.x - 1) / _block_.x;
 		_grid_.y = (domain->getAxis(2).n + _block_.y - 1) / _block_.y;

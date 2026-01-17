@@ -5,6 +5,7 @@
 #include <pybind11/stl.h>
 
 #include "FFT.h"
+#include "Spline4D.h"
 #include "complex_vector.h"
 #include <cuda_runtime.h>
 
@@ -26,6 +27,22 @@ void init_operator(py::module_ &m) {
             (void (cuFFT2d::*)(bool, std::shared_ptr<complex4DReg>&, std::shared_ptr<complex4DReg>&)) &
             cuFFT2d::adjoint,
             "Adjoint operator of cuFFT2d");
+
+
+      py::class_<Spline4D, std::shared_ptr<Spline4D>>(m, "Spline4D")
+      .def(py::init<std::shared_ptr<complex4DReg>, std::shared_ptr<complex4DReg>, 
+            float, float, std::vector<float>>(),
+          "Initialize Spline4D")
+
+      .def("forward",
+            (void (Spline4D::*)(bool, std::shared_ptr<complex4DReg>&, std::shared_ptr<complex4DReg>&)) &
+            Spline4D::forward,
+            "Forward operator of Spline4D")
+
+      .def("adjoint",
+            (void (Spline4D::*)(bool, std::shared_ptr<complex4DReg>&, std::shared_ptr<complex4DReg>&)) &
+            Spline4D::adjoint,
+            "Adjoint operator of Spline4D");
 
 }
 

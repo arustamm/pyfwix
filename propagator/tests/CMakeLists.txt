@@ -24,7 +24,7 @@ foreach(src ${TEST_SOURCES})
     target_link_libraries(${obj}
                                 genericCpp sepVector hypercube
                                 jsonCpp sep3d sep
-                                CUDA::cudart_static CUDA::cufft_static cuSZp_static
+                                CUDA::cudart_static CUDA::cufft_static zfp::zfp
                                 ${OpenCV_LIBS} tbb
                                 pybind11::module Python::Module
                                 GTest::gtest_main GTest::gtest

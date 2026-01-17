@@ -18,7 +18,7 @@ Propagator::Propagator (
 CudaOperator<complex2DReg, complex2DReg>(domain, range, model, data, grid, block, stream) {
 
 	_grid_ = {32, 4, 4};
-  	_block_ = {16, 16, 4};
+  	_block_ = {8, 8, 4};
 
 	// Here we have alredy allocated the model (source traces) and data (receiver traces) vectors on GPU
 	_slow_hyper = slow_hyper;
@@ -79,7 +79,7 @@ CudaOperator<complex2DReg, complex2DReg>(domain, range, model, data, grid, block
 	inj_src->data_vec->set_grid_block(_grid_, _block_);
 
 	// copy wavelet to inj_src->model_vec
-	CHECK_CUDA_ERROR(cudaHostRegister(wavelet->getVals(), inj_src->getDomainSizeInBytes(), cudaHostRegisterDefault));
+	// CHECK_CUDA_ERROR(cudaHostRegister(wavelet->getVals(), inj_src->getDomainSizeInBytes(), cudaHostRegisterDefault));
 	CHECK_CUDA_ERROR(cudaMemcpyAsync(inj_src->model_vec->mat, wavelet->getVals(), inj_src->getDomainSizeInBytes(), cudaMemcpyHostToDevice, _stream_));
 
 	// in inj_rec we reuse the same data_vec (wavefield) as in inj_src and allocate a new model_vec (recorded data)
@@ -107,9 +107,13 @@ CudaOperator<complex2DReg, complex2DReg>(domain, range, model, data, grid, block
 	look_ahead = par->getInt("look_ahead", 1);
 	decomp_look_ahead = par->getInt("wflds_to_store", 3);
 
-	CHECK_CUDA_ERROR(cudaHostUnregister(wavelet->getVals()));
+	// CHECK_CUDA_ERROR(cudaHostUnregister(wavelet->getVals()));
 
 	wfld_slice_gpu = make_complex_vector(down->getDomain(), _grid_, _block_, _stream_);
+
+	std::cout << "Propagator constructor done" << std::endl;
+	std::cout << "Wavefield dimensions: " << wfld_hyper->getAxis(1).n << " x " << wfld_hyper->getAxis(2).n << " x " << wfld_hyper->getAxis(3).n << " x " << wfld_hyper->getAxis(4).n << std::endl;
+	std::cout << "Number of shots: " << nshot << std::endl;
 };
 
 void Propagator::set_background_model(std::vector<std::shared_ptr<complex4DReg>> model) {
@@ -127,9 +131,9 @@ void Propagator::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> mo
 	if (!data->getHyper()->checkSame(this->getRange())) 
 		throw std::runtime_error("Error: data hypercube does not match the range");
 
-	CHECK_CUDA_ERROR(cudaHostRegister(model[0]->getVals(), model[0]->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
-	CHECK_CUDA_ERROR(cudaHostRegister(model[1]->getVals(), model[1]->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
-	CHECK_CUDA_ERROR(cudaHostRegister(data->getVals(), getRangeSizeInBytes(), cudaHostRegisterDefault));
+	// CHECK_CUDA_ERROR(cudaHostRegister(model[0]->getVals(), model[0]->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
+	// CHECK_CUDA_ERROR(cudaHostRegister(model[1]->getVals(), model[1]->getHyper()->getN123()*sizeof(std::complex<float>), cudaHostRegisterDefault));
+	// CHECK_CUDA_ERROR(cudaHostRegister(data->getVals(), getRangeSizeInBytes(), cudaHostRegisterDefault));
 
 	// always zero out the internal data_vec that records the data
 	this->data_vec->zero();
@@ -205,9 +209,9 @@ void Propagator::forward(bool add, std::vector<std::shared_ptr<complex4DReg>> mo
 	CHECK_CUDA_ERROR(cudaMemcpyAsync(data->getVals(), this->data_vec->mat, getRangeSizeInBytes(), cudaMemcpyDeviceToHost, _stream_));
 
 		// unpin the memory
-	CHECK_CUDA_ERROR(cudaHostUnregister(model[0]->getVals()));
-	CHECK_CUDA_ERROR(cudaHostUnregister(model[1]->getVals()));
-	CHECK_CUDA_ERROR(cudaHostUnregister(data->getVals()));
+	// CHECK_CUDA_ERROR(cudaHostUnregister(model[0]->getVals()));
+	// CHECK_CUDA_ERROR(cudaHostUnregister(model[1]->getVals()));
+	// CHECK_CUDA_ERROR(cudaHostUnregister(data->getVals()));
 	
 }
 

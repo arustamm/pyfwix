@@ -13,7 +13,7 @@ complex_vector* model, complex_vector* data, dim3 grid, dim3 block, cudaStream_t
   _dz_ = slow->getHyper()->getAxis(4).d;
   _ntaylor = par->getInt("taylor", 1);
 
-  _block_ = {16, 16, 4};
+  _block_ = {8, 8, 4};
   _grid_.x = (domain->getAxis(1).n + _block_.x - 1) / _block_.x;
   _grid_.y = (domain->getAxis(2).n + _block_.y - 1) / _block_.y;
   _grid_.z = (domain->getAxis(3).n*domain->getAxis(4).n + _block_.z - 1) / _block_.z;
