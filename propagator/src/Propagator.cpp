@@ -110,10 +110,6 @@ CudaOperator<complex2DReg, complex2DReg>(domain, range, model, data, grid, block
 	// CHECK_CUDA_ERROR(cudaHostUnregister(wavelet->getVals()));
 
 	wfld_slice_gpu = make_complex_vector(down->getDomain(), _grid_, _block_, _stream_);
-
-	std::cout << "Propagator constructor done" << std::endl;
-	std::cout << "Wavefield dimensions: " << wfld_hyper->getAxis(1).n << " x " << wfld_hyper->getAxis(2).n << " x " << wfld_hyper->getAxis(3).n << " x " << wfld_hyper->getAxis(4).n << std::endl;
-	std::cout << "Number of shots: " << nshot << std::endl;
 };
 
 void Propagator::set_background_model(std::vector<std::shared_ptr<complex4DReg>> model) {

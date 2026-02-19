@@ -41,7 +41,11 @@ public:
 
   inline void set_depth(size_t iz) {
     _iz_ = iz;
-    select->set_labels(_ref_->get_ref_labels(iz));
+    select->set_ref_maps(
+        _ref_->get_labels_low(iz), 
+        _ref_->get_labels_high(iz), 
+        _ref_->get_weights(iz)
+    );
   };
   size_t get_depth() {return _iz_;};
 

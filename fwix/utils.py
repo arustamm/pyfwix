@@ -332,7 +332,7 @@ def create_split_model(slow_full: SepVector.vector, den_full: SepVector.vector, 
     return final_model
 
 
-def create_grad_mask(model: SepVector.vector, zeros: float, sigma=3.0):
+def create_grad_mask(model: SepVector.vector, zeros: list[float], sigma=3.0):
     """
     Applies Gaussian taper to water layer in parallel across model splits.
     Input 'model' is expected to be the SuperVector of splits created above.
@@ -345,7 +345,7 @@ def create_grad_mask(model: SepVector.vector, zeros: float, sigma=3.0):
     first_split = mask.vecs[0] # This is a SuperVector(Slow, Den)
     first_comp = first_split.vecs[0] # This is the Slowness SepVector
     dz = first_comp.getHyper().axes[-1].d # Axis 3 is Z (in Python [X,Y,F,Z])
-    nzeros = int(zeros / dz)
+    ztop, zbottom = int(zeros[0] / dz), int(zeros[1] / dz)
 
     # --- Worker Function ---
     def _mask_worker(split_idx, split_sv):
@@ -358,13 +358,15 @@ def create_grad_mask(model: SepVector.vector, zeros: float, sigma=3.0):
         
         # Apply to Slowness
         slow = split_sv.vecs[0].getNdArray()
-        slow[:nzeros, ...] = 0.
+        slow[:ztop, ...] = 0.
+        slow[-zbottom:, ...] = 0.
         slow[:] = gaussian_filter(slow, sigma=sigma, axes=0)
         
         # Apply to Density
-        den = split_sv.vecs[1].getNdArray()
-        den[:nzeros, ...] = 0.
-        den[:] = gaussian_filter(den, sigma=sigma, axes=0)
+        # den = split_sv.vecs[1].getNdArray()
+        # den[:ztop, ...] = 0.
+        # den[-zbottom:, ...] = 0.
+        # den[:] = gaussian_filter(den, sigma=sigma, axes=0)
         
         return split_idx
 
@@ -383,16 +385,346 @@ def create_grad_mask(model: SepVector.vector, zeros: float, sigma=3.0):
                 print(f"Masking failed on split: {e}")
                 raise e
     
-    return mask, nzeros
+    return mask, ztop, zbottom
+
+
+import numpy as np
+from scipy.ndimage import map_coordinates, gaussian_filter
+from multiprocessing import Pool, cpu_count
+from functools import partial
+from scipy.signal import windows
+
+def compute_structural_dips(image_tlg, dx, dy, dz, sigma=1.0):
+    """
+    Computes structural dips z_x and z_y from a Time-Lag Gather.
     
-    mask = model.clone()
-    mask.set(1.)
-    for vec in mask.vecs:
-        dz = vec[0].getHyper().axes[-1].d
-        nzeros = int(zeros / dz)
-        vec[0][:nzeros, ...] = 0.
-        vec[1][:nzeros, ...] = 0.
-        vec[0][:] = gaussian_filter(vec[0][:], sigma=sigma, axes=0)
-        vec[1][:] = gaussian_filter(vec[1][:], sigma=sigma, axes=0)
+    Parameters:
+    -----------
+    image_tlg : ndarray
+        3D volume (nz, ny, nx) - typically zero-lag image
+    dx, dy, dz : float
+        Grid spacing in physical units (e.g., meters or km).
+    sigma : float
+        Smoothing factor for stability. standard=1.0 pixel.
+        
+    Returns:
+    --------
+    zx, zy : ndarray
+        3D volumes of dips. Shape: (nz, ny, nx).
+    """
     
-    return mask, nzeros
+    # 1. Smooth Image to Stabilize Derivatives
+    img_smooth = gaussian_filter(image_tlg, sigma=sigma)
+    
+    # 2. Compute Gradients
+    # np.gradient returns [dI/dim0, dI/dim1, dI/dim2]
+    # Assuming input shape is (Z, Y, X)
+    g_z, g_y, g_x = np.gradient(img_smooth, dz, dy, dx, edge_order=2)
+    
+    # 3. Calculate Dips (zx, zy)
+    # Formula: zx = - (dI/dx) / (dI/dz)
+    
+    # Add stabilization term to denominator to avoid division by zero
+    epsilon = 1e-2 * (np.max(np.abs(g_z)) + 1e-10)
+    
+    zx = -g_x / (g_z + epsilon)
+    zy = -g_y / (g_z + epsilon)
+    
+    return zx, zy
+
+def get_slope_from_eq26(theta_rad, s_z, zx_z, zy_z, azimuth=0.0):
+    """
+    Compute tau-slope from angle using Sava & Fomel eq. 26.
+    
+    Parameters:
+    -----------
+    theta_rad : float or ndarray
+        Opening angle in radians
+    s_z : ndarray
+        Slowness profile s(z). Shape: (nz,)
+    zx_z, zy_z : ndarray
+        Structural dip profiles. Shape: (nz,)
+    azimuth : float
+        Azimuth angle in radians (for 3D). Default 0 (inline direction).
+        
+    Returns:
+    --------
+    slope : ndarray
+        d(tau)/dz in physical units (s/m)
+    """
+    # Dip correction factor: sqrt(1 + zx^2 + zy^2)
+    struct_term = np.sqrt(1 + zx_z**2 + zy_z**2)
+    
+    # For 2D or inline direction (azimuth = 0):
+    # slope = s(z) * cos(theta) / sqrt(1 + zx^2 + zy^2)
+    # This is the inverse of eq. 26 solved for p_tau
+    
+    # CORRECTED: The slope should be:
+    # d(tau)/dz = s(z) * cos(theta) / struct_term
+    slope = (s_z * np.cos(theta_rad)) / (struct_term + 1e-10)
+    
+    return slope
+
+def tau_to_adcig_local(gather_1d, s_z, zx_z, zy_z, dz, dtau, angles_deg, 
+                 window_z=20, azimuth=0.0):
+    """
+    Converts Time-Lag gather to Angle Gather for a SINGLE (x,y) location.
+    
+    Parameters:
+    -----------
+    gather_1d : ndarray
+        Time-Lag gather at this location. Shape: (nz, ntau)
+    s_z : ndarray
+        Slowness profile s(z) at this location. Shape: (nz,)
+    zx_z, zy_z : ndarray
+        Structural dip profiles z_x(z) and z_y(z). Shape: (nz,)
+    dz, dtau : float
+        Grid spacing in depth and tau directions (same units as slowness)
+    angles_deg : ndarray
+        Target opening angles in degrees.
+    window_z : int
+        Half-width of the vertical stacking window (in samples)
+    azimuth : float
+        Azimuth angle in degrees (for 3D)
+        
+    Returns:
+    --------
+    angle_gather : ndarray
+        The angle gather for this point. Shape: (nz, n_angles)
+    """
+    nz, ntau = gather_1d.shape
+    n_angles = len(angles_deg)
+    angles_rad = np.radians(angles_deg)
+    azimuth_rad = np.radians(azimuth)
+    
+    # Output container
+    angle_gather = np.zeros((nz, n_angles), dtype=np.float32)
+    
+    # Tau center index (zero-lag position)
+    tau_center_idx = ntau // 2
+    
+    # Define the local window for stacking
+    z_offsets = np.arange(-window_z, window_z + 1)
+    n_stack = len(z_offsets)
+    
+    # Loop through desired angles
+    for i_ang, theta in enumerate(angles_rad):
+        
+        # 1. Calculate the slope profile for this angle
+        # Units: s/m (physical slope d(tau)/dz)
+        slope_profile_phys = get_slope_from_eq26(
+            theta, s_z, zx_z, zy_z, azimuth_rad
+        )
+        
+        # Convert to index units: (tau_samples / z_samples)
+        slope_profile_idx = slope_profile_phys * (dz / dtau)
+        
+        # 2. Stack along the trajectory
+        for iz in range(nz):
+            
+            amp_sum = 0.0
+            count = 0
+            
+            for dz_offset in z_offsets:
+                iz_neighbor = iz + dz_offset
+                
+                # Boundary check in z
+                if iz_neighbor < 0 or iz_neighbor >= nz:
+                    continue
+                
+                # Compute tau shift based on slope at current depth iz
+                # The trajectory is: tau(z') = tau_0 + slope(z) * (z' - z)
+                tau_shift = slope_profile_idx[iz] * dz_offset
+                itau_float = tau_center_idx + tau_shift
+                
+                # Boundary check in tau
+                if itau_float < 0 or itau_float >= ntau - 1:
+                    continue
+                
+                # 3. Bilinear interpolation
+                itau_floor = int(np.floor(itau_float))
+                itau_ceil = itau_floor + 1
+                weight = itau_float - itau_floor
+                
+                if itau_ceil < ntau:
+                    amp = (1 - weight) * gather_1d[iz_neighbor, itau_floor] + \
+                          weight * gather_1d[iz_neighbor, itau_ceil]
+                else:
+                    amp = gather_1d[iz_neighbor, itau_floor]
+                
+                amp_sum += amp
+                count += 1
+            
+            # Normalize by number of valid samples
+            if count > 0:
+                angle_gather[iz, i_ang] = amp_sum
+        
+    return angle_gather
+
+def freq_to_timelag(freq_gather, dt, nt, fmin=3, fmax=25, taper_alpha=0.2, max_time_lag=None):
+    """
+    Convert frequency-domain gather to time-lag domain, optionally windowing 
+    to a specific maximum lag.
+    
+    Parameters:
+    -----------
+    freq_gather : ndarray
+        Frequency domain gather. Shape: (nz, nfreq, ...) 
+    dt : float
+        Time sampling interval
+    nt : int
+        Original number of time samples (determines df)
+    max_time_lag : float or None
+        If set, truncates the output to keep lags within [-max_time_lag, +max_time_lag].
+        This significantly reduces memory for the subsequent angle conversion.
+    
+    Returns:
+    --------
+    timelag_gather : ndarray
+        Time-lag domain gather. 
+        Shape: (nz, nt) if max_time_lag is None
+        Shape: (nz, 2*n_lag + 1) if max_time_lag is set
+    """
+    nz = freq_gather.shape[0]
+    nf = freq_gather.shape[1]
+
+    # Calculate frequency indices
+    ifmin = int(round(fmin * dt * nt))
+    ifmax = ifmin + nf
+    
+    # Create Tukey taper
+    taper = windows.tukey(nf, alpha=taper_alpha)
+    
+    # Initialize frequency-domain array (full spectrum size based on nt)
+    f_grad = np.zeros((nz, nt), dtype=np.complex64)
+    
+    # Fill positive frequencies
+    f_grad[:, ifmin:ifmax] = freq_gather * taper[None, :]
+    
+    # Fill negative frequencies (Hermitian symmetry)
+    f_grad[:, -ifmax:-ifmin] = np.conj(np.flip(
+        freq_gather * taper[None, :], axis=1
+    ))
+    
+    # Transform to time domain
+    t_grad = np.fft.ifft(f_grad, axis=1).real
+    
+    # Shift zero-lag to center
+    t_grad = np.fft.fftshift(t_grad, axes=1)
+    
+    # --- NEW: Apply Time Lag Windowing ---
+    if max_time_lag is not None:
+        # Calculate number of samples to keep on each side of zero
+        n_lag_samples = int(np.floor(max_time_lag / dt))
+        
+        center_idx = nt // 2
+        start_idx = center_idx - n_lag_samples
+        end_idx = center_idx + n_lag_samples + 1
+        
+        # Ensure we don't go out of bounds
+        start_idx = max(0, start_idx)
+        end_idx = min(nt, end_idx)
+        
+        # Slice the array
+        t_grad = t_grad[:, start_idx:end_idx]
+        
+    return t_grad
+
+def process_single_location_from_freq(args):
+    """
+    Worker function to process a single (ix, iy) location from frequency domain.
+    Updated to unpack max_time_lag.
+    """
+    (ix, iy, freq_gather, s_z, zx_z, zy_z, 
+     dt, nt, dz, dx, dy, angles_deg, window_z, azimuth,
+     fmin, fmax, taper_alpha, max_time_lag) = args  # <--- Added max_time_lag to unpack
+    
+    # Step 1: Convert frequency domain to time-lag domain (with optional windowing)
+    timelag_gather = freq_to_timelag(
+        freq_gather, dt, nt, fmin, fmax, taper_alpha, max_time_lag
+    )
+    
+    # Determine dtau from the time-lag gather
+    # Note: dtau is just dt, but ntau might now be smaller due to windowing
+    dtau = dt 
+    
+    # Step 2: Convert time-lag to angle domain
+    # tau_to_adcig_local automatically handles the new shape because it 
+    # calculates the center based on gather_1d.shape[1] // 2
+    angle_gather = tau_to_adcig_local(
+        timelag_gather, s_z, zx_z, zy_z, 
+        dz, dtau, angles_deg, 
+        window_z=window_z, azimuth=azimuth
+    )
+    
+    return (ix, iy, angle_gather)
+
+def freq_to_angle_volume(freq_volume, slowness_volume, zx_volume, zy_volume,
+                        dt, nt, dz, dx, dy, angles_deg,
+                        fmin, fmax, taper_alpha=0.2,
+                        window_z=20, azimuth=0.0, 
+                        max_time_lag=None,   # <--- New Parameter
+                        n_processes=None, chunk_size=50, verbose=True):
+    """
+    Convert frequency-domain volume to angle gathers in parallel.
+    
+    Parameters:
+    -----------
+    ... (standard args) ...
+    max_time_lag : float or None
+        Maximum time lag (in seconds) to keep before angle conversion.
+        Events outside [-max_time_lag, +max_time_lag] are discarded.
+        Set this to reduce memory usage and compute time.
+    """
+    nz, nfreq, ny, nx = freq_volume.shape
+    n_angles = len(angles_deg)
+    
+    if verbose:
+        print(f"Input frequency volume shape: {freq_volume.shape}")
+        if max_time_lag:
+            print(f"Applying max time lag: +/- {max_time_lag} s")
+        else:
+            print("Keep full time axis (no lag truncation)")
+            
+    # Initialize output volume
+    angle_volume = np.zeros((nz, n_angles, ny, nx), dtype=np.float32)
+    
+    # Determine number of processes
+    if n_processes is None:
+        n_processes = cpu_count()
+    
+    # Prepare arguments for all spatial locations
+    tasks = []
+    for iy in range(ny):
+        for ix in range(nx):
+            freq_gather = freq_volume[:, :, iy, ix]
+            s_z = slowness_volume[:, iy, ix]
+            zx_z = zx_volume[:, iy, ix]
+            zy_z = zy_volume[:, iy, ix]
+            
+            # Pack arguments (added max_time_lag at the end)
+            tasks.append((ix, iy, freq_gather, s_z, zx_z, zy_z,
+                         dt, nt, dz, dx, dy, angles_deg, window_z, azimuth,
+                         fmin, fmax, taper_alpha, max_time_lag))
+    
+    # Process in parallel
+    total_tasks = len(tasks)
+    completed = 0
+    
+    with Pool(processes=n_processes) as pool:
+        for ix, iy, angle_gather in pool.imap_unordered(
+            process_single_location_from_freq, 
+            tasks, 
+            chunksize=chunk_size
+        ):
+            angle_volume[:, :, iy, ix] = angle_gather
+            
+            completed += 1
+            if verbose and completed % 100 == 0:
+                percent = 100 * completed / total_tasks
+                print(f"Progress: {completed}/{total_tasks} ({percent:.1f}%)")
+    
+    if verbose:
+        print("Conversion complete!")
+    
+    return angle_volume

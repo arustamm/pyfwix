@@ -48,6 +48,19 @@ class ExtendedBorn(Op.Operator):
 		mod = [m.cppMode for m in model]
 		self.cppMode.adjoint(add, mod, data.cppMode)
 
+class ExtendedMigration(Op.Operator):
+	# model here refers to the slowness model
+	# data refers to the recorded traces
+	def __init__(self, model, data, slow_den, propagator):
+		self.setDomainRange(model,data)
+		mod = [m.cppMode for m in slow_den]
+		# cpp code needs the hypercube corresponding to the injected source traces
+		self.cppMode = pyFWIX.StreamingExtendedMigration(propagator.cppMode, mod)
+
+	def migrate(self,add,model,data):
+		if not add: model.zero()
+		self.cppMode.migrate(add, model.cppMode, data.cppMode)
+
 
 class PhaseShift(Op.Operator):
 	def __init__(self,model,data, dz, eps=0):

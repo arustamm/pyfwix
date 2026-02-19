@@ -22,7 +22,8 @@ def _obj_grad_worker(
 	shots_per_gpu: int,
 	gpu_stream_batches: Tuple[int],
 	geom_mapping: Dict[str, str],
-	freq_id: int
+	freq_id: int,
+	obj_type: str = 'l2'
 ) -> pd.DataFrame:
 	"""
 	Worker function executed on every Dask partition.
@@ -79,10 +80,43 @@ def _obj_grad_worker(
 			# Forward Modeling: d_sim = F(m)
 			prop.forward(False, local_model, res) 
 
-			# Compute Residual: r = F(m) - d_obs
-			res.scaleAdd(data, 1.0, -1.0)
-			# Accumulate norm_sqective
-			norm_sq += np.real(res.dot(res))
+			if obj_type == 'phase-only':
+				f = res.getNdArray()
+				d = data.getNdArray()
+
+				abs_f = np.abs(f)
+				abs_d = np.abs(d)
+
+				alpha = 0.01
+				eps_floor = 1e-9
+				eps_f = alpha * np.median(np.abs(f)) + eps_floor
+				eps_d = alpha * np.median(np.abs(d)) + eps_floor
+
+				a_f = np.sqrt(abs_f**2 + eps_f**2)
+				a_d = np.sqrt(abs_d**2 + eps_d**2)
+
+				# optional soft weight to downweight low-amplitude modeled samples
+				w = abs_f**2 / (abs_f**2 + eps_f**2)   # in [0,1]
+			
+				# normalized (phase-like) data
+				f_hat = f / a_f
+				d_hat = d / a_d
+
+				# residual + objective
+				r = f_hat - d_hat
+				norm_sq += np.real(np.vdot(r, r))   # or 0.5*... if you want the 1/2 here
+
+				# adjoint source (data-space): lambda = D^*(r)
+				proj = np.real(np.conj(f_hat) * r)              # elementwise real
+				lam = (r - f_hat * proj) / a_f
+				lam *= w
+
+				# write adjoint source back into res buffer
+				f[:] = lam                                 # optional but recommended
+				
+			else: # Standard L2
+				res.scaleAdd(data, 1.0, -1.0)
+				norm_sq += np.real(res.dot(res))
 			
 			# Adjoint (Gradient): g = F' * r 
 			born.adjoint(False, local_grad, res)
@@ -108,7 +142,8 @@ def _obj_worker(
 	shots_per_gpu: int,
 	gpu_stream_batches: Tuple[int],
 	geom_mapping: Dict[str, str],
-	freq_id: int
+	freq_id: int,
+	obj_type: str = 'l2'
 ) -> pd.DataFrame:
 	"""
 	Worker function executed on every Dask partition.
@@ -162,10 +197,20 @@ def _obj_worker(
 			
 			# Forward Modeling: d_sim = F(m)
 			prop.forward(False, local_model, res) 
-			# Compute Residual: r = F(m) - d_obs
-			res.scaleAdd(data, 1.0, -1.0)
-			# Accumulate norm_sqective
-			norm_sq += np.real(res.dot(res))
+
+			if obj_type == 'phase-only':
+				epsilon = 1e-9
+				f_np = res.getNdArray()
+				d_np = data.getNdArray()
+				
+				f_hat = f_np / (np.abs(f_np) + epsilon)
+				d_hat = d_np / (np.abs(d_np) + epsilon)
+				
+				diff = f_hat - d_hat
+				norm_sq += np.real(np.vdot(diff, diff))
+			else:
+				res.scaleAdd(data, 1.0, -1.0)
+				norm_sq += np.real(res.dot(res))
 
 		finally:
 			# Clean up GPU memory explicitly
@@ -175,134 +220,6 @@ def _obj_worker(
 	# Return summary for this partition
 	return norm_sq
 
-def _build_tree_reduction(delayed_items):
-    if not delayed_items:
-        return None
-
-    # If 1 item, it's ALREADY a tuple from the worker. Return it directly.
-    if len(delayed_items) == 1:
-        return delayed_items[0]
-
-    while len(delayed_items) > 1:
-        new_level = []
-        for i in range(0, len(delayed_items), 2):
-            left = delayed_items[i]
-            if i + 1 < len(delayed_items):
-                right = delayed_items[i+1]
-                summ = dask.delayed(_extract_and_sum)(left, right)
-                new_level.append(summ)
-            else:
-                new_level.append(left)
-        delayed_items = new_level
-    
-    return delayed_items[0]
-
-
-def _extract_and_sum(item1, item2):
-    """
-    Simpler Reducer.
-    Input: Tuples (freq_id, obj, grad) or None.
-    Output: Tuple (freq_id, obj, grad).
-    """
-    # 1. Handle None (empty partitions)
-    if item1 is None: return item2
-    if item2 is None: return item1
-
-    # 2. Unpack directly (No parsing needed!)
-    id1, obj1, grad1 = item1
-    id2, obj2, grad2 = item2
-
-    if id1 != id2:
-        raise ValueError(f"Freq ID mismatch: {id1} vs {id2}")
-
-    # 3. Accumulate Gradient
-    # Reuse grad1 memory if available
-    if grad1 is not None and grad2 is not None:
-        grad1.scaleAdd(grad2, 1.0, 1.0)
-    elif grad1 is None:
-        grad1 = grad2
-
-    return (id1, obj1 + obj2, grad1)
-
-def _io_load_and_compute(part_df, model_path, part_wav, prop_par, 
-						shots_per_gpu, stream_batches, geom_map, freq_id,
-						compute_grad=True, grad_tmp_dir=None):
-	"""
-	Worker wrapper that loads the velocity model from Disk (Scratch)
-	instead of receiving it over the network.
-	"""
-	# 1. Load the Velocity Model from the shared filesystem
-	slow = safe_load_pickle(model_path[0])
-	den = safe_load_pickle(model_path[1])
-	slow_den = Vec.superVector(slow, den)
-
-    # 2. Run the original worker logic
-	if not compute_grad:
-		return _obj_worker(
-			part_df, 
-			slow_den, 
-			part_wav, 
-			prop_par, 
-			shots_per_gpu, 
-			stream_batches, 
-			geom_map, 
-			freq_id
-		)
-	
-	else:
-		if grad_tmp_dir is None:
-			raise ValueError("grad_tmp_dir must be specified when compute_grad = True.")
-		
-		freq_id, norm_sq, grad = _obj_grad_worker(
-								part_df, 
-								slow_den, 
-								part_wav, 
-								prop_par, 
-								shots_per_gpu, 
-								stream_batches, 
-								geom_map, 
-								freq_id
-							)
-		out_paths = []
-		unique_suffix = uuid.uuid4().hex
-		# Loop over components (e.g., 0=Slow, 1=Den)
-		for i, comp_vec in enumerate(grad.vecs):
-			# Create explicit filename for this component
-			fname = f"grad_freq{freq_id}_comp{i}_{unique_suffix}.pkl"
-			path = os.path.join(grad_tmp_dir, fname)
-			
-			# Write just this component
-			with open(path, 'wb') as f:
-				pickle.dump(comp_vec, f, protocol=pickle.HIGHEST_PROTOCOL)
-			out_paths.append(path)
-
-		# Cleanup
-		del grad, slow, den
-		
-		# Return LIST of paths: [path_slow, path_den]
-		return (freq_id, norm_sq, out_paths)
-		
-def _sum_gradients_on_disk(file_list, output_path):
-	"""
-	Reads a list of .H files and sums them into one.
-	"""
-	if not file_list:
-		return None
-		
-	# Read the first file to initialize sum
-	total_vec = safe_load_pickle(file_list[0])
-
-	# Loop and accumulate
-	# Efficient strategy: Read into a temp buffer and add
-	for path in file_list[1:]:
-		temp_vec = safe_load_pickle(path)
-		total_vec.scaleAdd(temp_vec, 1.0, 1.0)
-		
-	# Write the final result
-	with open(output_path, 'wb') as f:
-		pickle.dump(total_vec, f, protocol=pickle.HIGHEST_PROTOCOL)
-	return output_path
-	
 def _born_worker(
 	df: pd.DataFrame,
 	model: Vec.superVector,     # Background model (m)
@@ -312,7 +229,8 @@ def _born_worker(
 	shots_per_gpu: int,
 	gpu_stream_batches: Tuple[int],
 	geom_mapping: Dict[str, str],
-	freq_id: int
+	freq_id: int,
+	obj_type: str = 'l2'
 	) -> Tuple[float, float]:
 	"""
 	Computes (res . born_data) and (born_data . born_data) for a partition.
@@ -379,14 +297,50 @@ def _born_worker(
 
 				# 4. Compute Non-Linear Residual: r = F(m) - d_obs
 				prop.forward(False, local_model, res)
-				res.scaleAdd(data, 1.0, -1.0) 
-
 				# 5. Compute Linearized Residual: dr = J * dm
 				born.forward(False, local_dmodel, dres)
 
-				# 6. Accumulate Dot Products (Real parts only)
-				dot_res_dres += res.dot(dres)
-				dot_dres_dres += dres.dot(dres)
+				# --- LINEARIZATION MAPPING ---
+				if obj_type == 'phase-only':
+					f  = res.getNdArray()        # modeled data F(m)  (IMPORTANT)
+					d  = data.getNdArray()       # observed
+					dd = dres.getNdArray()       # Born: δf = J δm
+
+					abs_f = np.abs(f)
+					abs_d = np.abs(d)
+
+					alpha = 0.1
+					eps_floor = 1e-9
+					eps_f = alpha * np.median(np.abs(f)) + eps_floor
+					eps_d = alpha * np.median(np.abs(d)) + eps_floor
+
+					a_f = np.sqrt(abs_f**2 + eps_f**2)
+					a_d = np.sqrt(abs_d**2 + eps_d**2)
+
+					f_hat = f / a_f
+					d_hat = d / a_d
+					r_hat = f_hat - d_hat
+
+					# optional weight (use same as in obj/grad)
+					w = abs_f**2 / (abs_f**2 + eps_f**2)
+					r_hat *= w
+
+					# Linearization: δf_hat = (dd - f_hat*Re(conj(f_hat)*dd)) / a_f
+					proj_pert = np.real(np.conj(f_hat) * dd)
+					d_f_hat = (dd - f_hat * proj_pert) / a_f
+					d_f_hat *= w
+
+					# write mapped perturbation back into dres buffer
+					dd[:] = d_f_hat
+
+					dot_res_dres += np.vdot(r_hat, d_f_hat)
+					dot_dres_dres += np.vdot(d_f_hat, d_f_hat)
+
+				else:
+					# Standard L2
+					res.scaleAdd(data, 1.0, -1.0) # r = f - d
+					dot_res_dres += res.dot(dres)
+					dot_dres_dres += dres.dot(dres)
 
 			finally:
 				del prop, born, data, wav_vec, res, dres, local_model, local_dmodel
@@ -399,8 +353,217 @@ def _born_worker(
 
 	return dot_res_dres, dot_dres_dres
 
+def _migration_worker(
+	df: pd.DataFrame,
+	model: Vec.superVector,     
+	wavelet: pd.DataFrame,
+	prop_par: Dict[str, Any],
+	shots_per_gpu: int,
+	gpu_stream_batches: Tuple[int],
+	geom_mapping: Dict[str, str],
+	freq_id: int
+) -> Vec.superVector:
+	"""
+	Worker function to compute One-Way Migration (Adjoint).
+	"""
+	if len(df) == 0:
+		return model.clone().zero()
+
+	# The 'grad' in FWI context is our 'image' in Migration context
+	image = model.clone().zero()
+	shot_col = geom_mapping['id']
+
+	df = df.sort_values(shot_col)
+	wavelet = wavelet.sort_index()
+
+	unique_shots = df[shot_col].unique()
+	padx = prop_par.get("ginsu_x", 0.0)
+	pady = prop_par.get("ginsu_y", 0.0)
+
+	for i in range(0, len(unique_shots), shots_per_gpu):
+		batch_ids = unique_shots[i : i + shots_per_gpu]
+		df_batch = df[df[shot_col].isin(batch_ids)]
+		wav_batch = wavelet.loc[(freq_id, list(batch_ids)), :]
+
+		# 1. Setup Local Geometry and Slicing (Ginsu)
+		geometry = create_geometry(df_batch, geom_mapping)
+		slices = get_slices(geometry, model.vecs[0], padx, pady)
+		
+		local_slow = slice_sepvector(model.vecs[0], slices)
+		local_den = slice_sepvector(model.vecs[1], slices)
+		local_model = Vec.superVector(local_slow, local_den)
+		
+		# Output container for the local image slice
+		local_image = local_model.vecs[0].clone().zero()
+
+		# 2. Setup Wavelet and Data
+		time_axis = get_axis(wav_batch)
+		wav_vec = create_wavelet(wav_batch, time_axis)
+		data = create_data(df_batch, time_axis) # This is the "residual" to migrate
+		res = data.clone()
+		
+		# 3. Initialize Operator and Migrate
+		prop_par["padx"] = local_slow.shape[-1]
+		prop_par["pady"] = local_slow.shape[-2]
+		par = genericIO.pythonParams(prop_par)
+
+		try:
+			# Propagator computes background wavefields
+			prop = CudaWEM.Propagator(
+				local_model, data, wav_vec, 
+				par, geometry
+			)
+			# Use your new Migration operator
+			migrator = CudaWEM.ExtendedMigration(
+				local_model, data, local_model, prop
+			)
+			
+			prop.forward(False, local_model, res)
+			# Adjoint: Image = F' * data
+			migrator.migrate(False, local_image, data)
+
+			# 4. Accumulate local image into partition image
+			image.vecs[0][slices] += local_image[:]
+			# nothing for density, just stays empty
+
+		finally:
+			del prop, migrator, data, wav_vec, local_image
+			gc.collect()
+
+	return image
+
+def _build_tree_reduction(delayed_items):
+    if not delayed_items:
+        return None
+
+    # If 1 item, it's ALREADY a tuple from the worker. Return it directly.
+    if len(delayed_items) == 1:
+        return delayed_items[0]
+
+    while len(delayed_items) > 1:
+        new_level = []
+        for i in range(0, len(delayed_items), 2):
+            left = delayed_items[i]
+            if i + 1 < len(delayed_items):
+                right = delayed_items[i+1]
+                summ = dask.delayed(_extract_and_sum)(left, right)
+                new_level.append(summ)
+            else:
+                new_level.append(left)
+        delayed_items = new_level
+    
+    return delayed_items[0]
+
+
+def _extract_and_sum(item1, item2):
+    """
+    Simpler Reducer.
+    Input: Tuples (freq_id, obj, grad) or None.
+    Output: Tuple (freq_id, obj, grad).
+    """
+    # 1. Handle None (empty partitions)
+    if item1 is None: return item2
+    if item2 is None: return item1
+
+    # 2. Unpack directly (No parsing needed!)
+    id1, obj1, grad1 = item1
+    id2, obj2, grad2 = item2
+
+    if id1 != id2:
+        raise ValueError(f"Freq ID mismatch: {id1} vs {id2}")
+
+    # 3. Accumulate Gradient
+    # Reuse grad1 memory if available
+    if grad1 is not None and grad2 is not None:
+        grad1.scaleAdd(grad2, 1.0, 1.0)
+    elif grad1 is None:
+        grad1 = grad2
+
+    return (id1, obj1 + obj2, grad1)
+
+def _io_load_and_compute(part_df, model_path, part_wav, prop_par, 
+						shots_per_gpu, stream_batches, geom_map, freq_id,
+						compute_grad=True, grad_tmp_dir=None, obj_type='l2'):
+	"""
+	Worker wrapper that loads the velocity model from Disk (Scratch)
+	instead of receiving it over the network.
+	"""
+	# 1. Load the Velocity Model from the shared filesystem
+	slow = safe_load_pickle(model_path[0])
+	den = safe_load_pickle(model_path[1])
+	slow_den = Vec.superVector(slow, den)
+
+    # 2. Run the original worker logic
+	if not compute_grad:
+		return _obj_worker(
+			part_df, 
+			slow_den, 
+			part_wav, 
+			prop_par, 
+			shots_per_gpu, 
+			stream_batches, 
+			geom_map, 
+			freq_id,
+			obj_type=obj_type
+		)
+	
+	else:
+		if grad_tmp_dir is None:
+			raise ValueError("grad_tmp_dir must be specified when compute_grad = True.")
+		
+		freq_id, norm_sq, grad = _obj_grad_worker(
+								part_df, 
+								slow_den, 
+								part_wav, 
+								prop_par, 
+								shots_per_gpu, 
+								stream_batches, 
+								geom_map, 
+								freq_id,
+								obj_type=obj_type
+							)
+		out_paths = []
+		unique_suffix = uuid.uuid4().hex
+		# Loop over components (e.g., 0=Slow, 1=Den)
+		for i, comp_vec in enumerate(grad.vecs):
+			# Create explicit filename for this component
+			fname = f"grad_freq{freq_id}_comp{i}_{unique_suffix}.pkl"
+			path = os.path.join(grad_tmp_dir, fname)
+			
+			# Write just this component
+			with open(path, 'wb') as f:
+				pickle.dump(comp_vec, f, protocol=pickle.HIGHEST_PROTOCOL)
+			out_paths.append(path)
+
+		# Cleanup
+		del grad, slow, den
+		
+		# Return LIST of paths: [path_slow, path_den]
+		return (freq_id, norm_sq, out_paths)
+		
+def _sum_gradients_on_disk(file_list, output_path):
+	"""
+	Reads a list of .H files and sums them into one.
+	"""
+	if not file_list:
+		return None
+		
+	# Read the first file to initialize sum
+	total_vec = safe_load_pickle(file_list[0])
+
+	# Loop and accumulate
+	# Efficient strategy: Read into a temp buffer and add
+	for path in file_list[1:]:
+		temp_vec = safe_load_pickle(path)
+		total_vec.scaleAdd(temp_vec, 1.0, 1.0)
+		
+	# Write the final result
+	with open(output_path, 'wb') as f:
+		pickle.dump(total_vec, f, protocol=pickle.HIGHEST_PROTOCOL)
+	return output_path
+
 def _io_load_and_compute_born(part_df, model_path, dmodel_path, part_wav, prop_par, 
-                              shots_per_gpu, stream_batches, geom_map, freq_id):
+                              shots_per_gpu, stream_batches, geom_map, freq_id, obj_type='l2'):
     """
     IO Wrapper: Loads both background model and search direction from scratch.
     """
@@ -417,11 +580,53 @@ def _io_load_and_compute_born(part_df, model_path, dmodel_path, part_wav, prop_p
     # Run computation
     res_dres, dres_dres = _born_worker(
         part_df, model, dmodel, part_wav, prop_par,
-        shots_per_gpu, stream_batches, geom_map, freq_id
+        shots_per_gpu, stream_batches, geom_map, freq_id,
+		obj_type=obj_type
     )
 
     del model, dmodel, slow, den, dslow, dden
     return res_dres, dres_dres
+
+def _io_load_and_migrate(
+    part_df, model_path, part_wav, prop_par, 
+    shots_per_gpu, stream_batches, geom_map, freq_id,
+    grad_tmp_dir=None
+):
+    """
+    IO Wrapper for Migration. Loads background model, 
+    runs migration, and saves result to disk.
+    """
+    if grad_tmp_dir is None:
+        raise ValueError("grad_tmp_dir must be specified for migration output.")
+
+    # 1. Load Background Model from Scratch
+    slow = safe_load_pickle(model_path[0])
+    den = safe_load_pickle(model_path[1])
+    background = Vec.superVector(slow, den)
+
+    # 2. Run Migration Computation
+    image_vec = _migration_worker(
+        part_df, background, part_wav, prop_par,
+        shots_per_gpu, stream_batches, geom_map, freq_id
+    )
+
+    # 3. Write Image Components to Scratch
+    # This matches the expected format of MigrationRunner
+    out_paths = []
+    unique_suffix = uuid.uuid4().hex
+    
+    for i, comp_vec in enumerate(image_vec.vecs):
+        fname = f"mig_freq{freq_id}_comp{i}_{unique_suffix}.pkl"
+        path = os.path.join(grad_tmp_dir, fname)
+        with open(path, 'wb') as f:
+            pickle.dump(comp_vec, f, protocol=pickle.HIGHEST_PROTOCOL)
+        out_paths.append(path)
+
+    # Cleanup
+    del image_vec, background, slow, den
+    
+    # Return (id, dummy_obj, list_of_paths)
+    return (freq_id, out_paths)
 
 import time
 import pickle

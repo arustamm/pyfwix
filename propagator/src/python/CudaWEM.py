@@ -4,28 +4,10 @@ import genericIO
 import numpy as np
 from pyVector import superVector
 
-class StreamingPropagator(Op.Operator):
-	# model here refers to the slowness model
-	# data refers to the recorded traces
-	def __init__(self, model, data, wavelet, par, geometry):
-		self.setDomainRange(model,data)
-		# cpp code needs the hypercube corresponding to the injected source traces
-		self.cppMode = pyCudaWEM.StreamingPropagator(
-			wavelet.getHyper().cppMode, data.getHyper().cppMode, 
-			model.vecs[0].getHyper().cppMode, wavelet.cppMode,
-			geometry["sx"], geometry["sy"], geometry["sz"], geometry["s_ids"],
-			geometry["rx"], geometry["ry"], geometry["rz"], geometry["r_ids"],
-			par.cppMode, par.pars["nbatches"]
-		)
-
-	def forward(self,add,model,data):
-		mod = [m.cppMode for m in model]
-		self.cppMode.forward(add, mod, data.cppMode)
-
 class Propagator(Op.Operator):
 	# model here refers to the slowness model
 	# data refers to the recorded traces
-	def __init__(self, model, data, wavelet, par, geometry):
+	def __init__(self, model, data, wavelet, par, geometry, nbatches=(1,1)):
 		self.setDomainRange(model,data)
 		# cpp code needs the hypercube corresponding to the injected source traces
 		self.cppMode = pyCudaWEM.Propagator(
@@ -50,7 +32,7 @@ class Propagator(Op.Operator):
 class ExtendedBorn(Op.Operator):
 	# model here refers to the slowness model
 	# data refers to the recorded traces
-	def __init__(self, model, data, slow_den, propagator):
+	def __init__(self, model, data, slow_den, propagator, nbatches=(1,1)):
 		self.setDomainRange(model,data)
 		mod = [m.cppMode for m in slow_den]
 		# cpp code needs the hypercube corresponding to the injected source traces
@@ -68,6 +50,22 @@ class ExtendedBorn(Op.Operator):
 		if not add: model.zero()
 		mod = [m.cppMode for m in model]
 		self.cppMode.adjoint(add, mod, data.cppMode)
+
+class ExtendedMigration(Op.Operator):
+	# model here refers to the slowness model
+	# data refers to the recorded traces
+	def __init__(self, model, data, slow_den, propagator, nbatches=(1,1)):
+		self.setDomainRange(model,data)
+		mod = [m.cppMode for m in slow_den]
+		# cpp code needs the hypercube corresponding to the injected source traces
+		self.cppMode = pyCudaWEM.ExtendedMigration(
+			model[0].getHyper().cppMode, data.getHyper().cppMode, 
+			mod, propagator.cppMode, nbatches
+		)
+
+	def migrate(self,add,model,data):
+		if not add: model.zero()
+		self.cppMode.migrate(add, model.cppMode, data.cppMode)
 
 
 class PhaseShift(Op.Operator):

@@ -6,7 +6,7 @@
 
 // Explicit template instantiations for all used combinations
 template class KernelLauncher<const float*, const float*, const float*, const cuFloatComplex*, float, float>;
-template class KernelLauncher<int, const int*>;
+
 template class KernelLauncher<const float*, const float*, const float*, const int*, float, float, int>;
 template class KernelLauncher<const complex_vector*, const complex_vector*>;
 template class KernelLauncher<int, int>;
@@ -26,8 +26,16 @@ __global__ void ps_adjoint(complex_vector* __restrict__ model, complex_vector* _
 typedef KernelLauncher<const float*, const float*, const float*, const cuFloatComplex*, float, float> PS_launcher;
 
 // selector
-__global__ void select_forward(complex_vector* __restrict__ model, complex_vector* __restrict__ data, int value, const int* __restrict__ labels);
-typedef KernelLauncher<int, const int*> Selector_launcher;
+template class KernelLauncher<int, const int*, const int* , const float*>;
+__global__ void select_forward(
+    complex_vector* __restrict__ model, 
+    complex_vector* __restrict__ data, 
+    int current_ref_idx, 
+    const int* __restrict__ labels_low,
+    const int* __restrict__ labels_high,
+    const float* __restrict__ weights
+);
+typedef KernelLauncher<int, const int*, const int* , const float*> Selector_launcher;
 
   // injection
 __global__ void inj_forward(complex_vector* __restrict__ model, complex_vector* __restrict__ data, const float* __restrict__ cx, const float* __restrict__ cy, const float* __restrict__ cz, const int* __restrict__ ids, float oz, float dz, int iz);

@@ -49,6 +49,13 @@ public:
         std::shared_ptr<complex2DReg> data
     );
 
+    // Just migrate
+    void migration(
+        bool add,
+        std::vector<std::shared_ptr<complex4DReg>> model,
+        std::shared_ptr<complex2DReg> data
+    );
+
     void cu_forward(bool add, complex_vector* __restrict__ model, complex_vector* __restrict__ data){
       throw std::runtime_error("Not implemented");
     };

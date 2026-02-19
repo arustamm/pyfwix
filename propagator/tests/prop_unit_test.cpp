@@ -186,7 +186,11 @@ class Selector_Test : public testing::Test {
 
 TEST_F(Selector_Test, dotTest) { 
   for (int iz = 0; iz < 3; ++iz) {
-    select->set_labels(ref->get_ref_labels(iz));
+    select->set_ref_maps(
+        ref->get_labels_low(iz), 
+        ref->get_labels_high(iz), 
+        ref->get_weights(iz)
+    );
     for (int iref = 0; iref < nref; ++iref) {
       select->set_value(iref);
       auto err = select->dotTest(verbose);

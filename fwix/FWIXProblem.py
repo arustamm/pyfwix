@@ -60,6 +60,9 @@ class FWIXProblem(Prblm.Problem):
 		self.problem_par = problem_par
 		self.retry_tasks = retry_tasks
 
+		self.objective = problem_par.get('obj', 'l2')
+		print(f"FWIXProblem initialized with objective: {self.objective}")
+
 		freq_col = geometry_mapping['freq_id']
 		shot_col = geometry_mapping['id']
 
@@ -83,15 +86,16 @@ class FWIXProblem(Prblm.Problem):
 		self.phys_model = self.split_op.range.clone()
 		self.phys_grad = self.phys_model.clone().zero()
 		self.split_op.forward(False, start_model, self.phys_model)
+		# Default: Coarse Model is the same as Start Model (Physical)
+		self.model = start_model.clone()
 
-		self._create_prec_op(start_model)
-		self._create_prox_op()
+		self._build_operators(start_model, n_freq_splits)
 
 		self.reg_op = None
-		self.epsilon = problem_par.get("reg", {}).get("epsilon", 0.0)
+		self.epsilon = problem_par.get("epsilon", 0.0)
 		if self.epsilon > 0:
-			self.reg_op = CuOp.Derivative(self.phys_model, self.phys_model, which=1, 
-										  order=4, mode=problem_par["reg"]['mode'])
+			print(f"-> Adding DSO Regularization with epsilon={self.epsilon}")
+			self.reg_op = CuOp.Derivative(self.phys_model, self.phys_model)
 			self.reg_vec = self.phys_model.clone()
 
 		self.grad = self.model.clone().zero()
@@ -100,159 +104,253 @@ class FWIXProblem(Prblm.Problem):
 		self.dmodel.zero()
 		self.setDefaults()
 
-	def _create_prec_op(self, start_model):
-		self.precond_op = None
+	def _build_operators(self, start_model, n_freq_splits):
+		"""
+		Constructs the self.precond_op chain and initializes self.model
+		handling all combinations of 'pre' and 'bounds'.
+		"""
+		print("--- Building Optimization Chain ---")
+
+		# 1. BASE: The Physical Split Operator
+		# This always exists.
+		self.split_op = CuOp.SplitOperator(start_model, n_splits=n_freq_splits)
+		self.phys_model = self.split_op.range.clone()
+		self.phys_grad = self.phys_model.clone().zero()
+		self.split_op.forward(False, start_model, self.phys_model)
+
+		# Current "Head" of the chain (starts at physical input)
+		# As we add operators, this 'current_op' grows backwards.
+		current_op = self.split_op
+		
+		# The model input to the current operator
+		# Starts as the Fine Grid Physical Model
+		current_model = start_model.clone()
+
+		# 2. OPTIONAL: Linear Preconditioner (Splines)
+		# If 'pre' is in parameters, we define Coarse Grid -> Fine Grid
 		if 'pre' in self.problem_par:
-			print("Building 4D Spline Preconditioner...")
+			print("-> Adding Linear Preconditioner (Splines)")
 			
-			# Helper to build a coarse vector from a fine one
-			def build_coarse(fine_vec, ns_coarse_dims):
+			# A. Define Coarse Grid
+			fine_slow = start_model.vecs[0]
+			fine_den  = start_model.vecs[1]
+			ns_config = self.problem_par['pre']['ns']
+			
+			# Helper to build coarse axes
+			def build_coarse_vec(fine_vec, dims):
 				fine_hyper = fine_vec.getHyper()
 				axes_coarse = []
-				# Iterate 1..4 (SepVector Axis convention)
-				for i in range(4):
+				for i in range(4): # 4D
 					ax_fine = fine_hyper.getAxis(i + 1)
-					n_c = ns_coarse_dims[i]
-					d_c = (ax_fine.n - 1) * ax_fine.d / (n_c - 1)
+					n_c = dims[i]
+					d_c = (ax_fine.n - 1) * ax_fine.d / (n_c - 1) if n_c > 1 else ax_fine.d
 					axes_coarse.append(Hypercube.axis(n=n_c, o=ax_fine.o, d=d_c))
 				return SepVector.getSepVector(axes=axes_coarse, storage='dataComplex')
 
-			# A. Geometry Definitions
-			fine_slow = start_model.vecs[0] # 4D Fine Slowness
-			fine_den  = start_model.vecs[1] # 4D Fine Density
+			coarse_slow = build_coarse_vec(fine_slow, ns_config['slow'])
+			coarse_den  = build_coarse_vec(fine_den, ns_config['den'])
 			
-			# Fetch config dictionary
-			ns_config = self.problem_par['pre']['ns']
-			
-			# 1. Slowness Coarse Grid
-			coarse_slow = build_coarse(fine_slow, ns_config['slow'])
-			# 2. Density Coarse Grid
-			coarse_den = build_coarse(fine_den, ns_config['den'])
-			
-			# Optimization Model is a SuperVector of these two potentially different grids
-			self.model = Vec.superVector(coarse_slow, coarse_den)
-			self.model.zero()
-			
+			# This becomes our new "current_model"
+			coarse_model = Vec.superVector(coarse_slow, coarse_den)
+			coarse_model.zero()
+
 			# B. Create Operators
-			# 1. Splines (Coarse 4D -> Fine 4D)
-			# Ensure Spline4D is imported from your pyCudaOperator module
 			op_spline_slow = CuOp.Spline4D(coarse_slow, fine_slow, type="CR-spline")
 			op_spline_den  = CuOp.Spline4D(coarse_den,  fine_den,  type="CR-spline")
-			
-			# 2. Combine Splines (Parallel Dstack)
-			# We explicitly pass the Domain (self.model) and Range (start_model)
 			op_spline_combined = Op.Dstack([op_spline_slow, op_spline_den])
-			
-			# 3. Chain: Spline -> Split
-			self.precond_op = Op.ChainOperator(op_spline_combined, self.split_op)
-			
-			print("Initializing Preconditioned Model via Linear CGLS...")
-			LinStop  = Stopper.BasicStopper(niter=self.problem_par['pre']['niter'])
-			CGsolver = LinearSolver.LCGsolver(LinStop)
-			
-			# Solve: Chain * m_coarse = phys_model
-			# Note: The problem calculates: residuals = Op*m - d
-			InitProb = Prblm.ProblemL2Linear(self.model, self.phys_model, self.precond_op)
-			CGsolver.setDefaults(save_obj=False, save_res=False, save_grad=False, save_model=False)
-			CGsolver.run(InitProb, verbose=True)
-			
-		else:
-			self.model = start_model.clone()
-			self.precond_op = self.split_op
-		
-	def _compute_bound_arrays(self, keys: list, comp_index: int, transform_func):
-		"""
-		Helper to compute lower and upper bounds for a specific model component.
-		
-		Args:
-			keys: List [key_for_lower_bound, key_for_upper_bound] from problem_par
-			comp_index: 0 for Slowness, 1 for Density
-			transform_func: Function to convert par value to model unit (e.g. v -> 1/v^2)
-		"""
-		bound_arrays = []
-		
-		# Iterate twice: once for Lower Bound, once for Upper Bound
-		for lim_key in keys:
-			if lim_key not in self.problem_par:
-				raise ValueError(f"Missing parameter key for bounds: {lim_key}")
-				
-			val = self.problem_par[lim_key]
-			target_val = transform_func(val)
 
-			# 1. Create Physical Target (SuperVector of Bands)
+			# C. Invert to initialize Coarse Model (Optional but recommended)
+			print("   Initializing Coarse Model values...")
+			LinStop  = Stopper.BasicStopper(niter=self.problem_par['pre'].get('init_iter', 5))
+			CGsolver = LinearSolver.LCGsolver(LinStop)
+			# Solve: Spline * m_coarse = m_fine
+			InitProb = Prblm.ProblemL2Linear(coarse_model, current_model, op_spline_combined)
+			CGsolver.setDefaults(save_obj=False, save_res=False, save_grad=False, save_model=False)
+			CGsolver.run(InitProb, verbose=False)
+
+			# D. Chain: Spline -> [Current Chain]
+			# Note: Op.ChainOperator(Op1, Op2) applies Op2(Op1(x))
+			# We want Split(Spline(x)), so Chain(Spline, Split)
+			current_op = Op.ChainOperator(op_spline_combined, current_op)
+			
+			# Update current model pointer
+			current_model = coarse_model
+
+		# 3. OPTIONAL: Bounds (SoftMinMax)
+		# If bounds exist, we wrap the current model (whether Coarse or Fine)
+		if any(x in self.problem_par for x in ["vmin", "vmax", "rho_min", "rho_max"]):
+			print("-> Adding Soft Constraints (Bounds)")
+			
+			# A. Prepare Bound Values
+			# Note: We pass the 'current_op' to project bounds to the correct grid (Coarse or Fine)
+			slow_max, slow_min = None, None
+			if "vmin" in self.problem_par:
+				slow_max, slow_min = self._compute_bound_arrays(
+					["vmin", "vmax"], 0, lambda v: 1./v**2, 
+					current_model, current_op # <-- Pass current state
+				)
+
+			den_min, den_max = None, None
+			if "rho_min" in self.problem_par:
+				den_min, den_max = self._compute_bound_arrays(
+					["rho_min", "rho_max"], 1, lambda r: r,
+					current_model, current_op
+				)
+
+			# B. Create Unbounded Model (The Domain)
+			unbounded_model = current_model.clone()
+			
+			# C. Create Soft Operators
+			# They map Unbounded -> Bounded (Current Model)
+			tau = self.problem_par.get('tau', 0.001)
+			
+			slow_op = CuOp.SoftMinMax(
+				model=unbounded_model.vecs[0], 
+				data=current_model.vecs[0], # Target is the constrained model
+				xmin=slow_min, xmax=slow_max, tau=[tau, tau]
+			)
+			den_op = CuOp.SoftMinMax(
+				model=unbounded_model.vecs[1], 
+				data=current_model.vecs[1], 
+				xmin=den_min, xmax=den_max, tau=[tau, tau]
+			)
+
+			# D. Stack and Chain
+			nl_dstack = Op.Dstack([slow_op.nl_op, den_op.nl_op])
+			lin_dstack = Op.Dstack([slow_op.lin_op, den_op.lin_op])
+			bound_op = Op.NonLinearOperator(nl_dstack, lin_dstack)
+
+			# Wrap current linear op as nonlinear to chain it
+			if not isinstance(current_op, Op.NonLinearOperator):
+				current_op = Op.NonLinearOperator(current_op, current_op)
+			
+			# Chain: Linear( Bound ( x ) )
+			current_op = Op.CombNonlinearOp(bound_op, current_op)
+			
+			# Update current model pointer
+			current_model = unbounded_model
+
+			if self.problem_par.get("enforce_neg_imag", True):
+				print("-> Adding Imaginary-Part Constraint (HyperbolicPenalty)")
+				
+				tau = self.problem_par.get('tau', 0.001)
+				
+				# Instantiate your monolithic operators
+				# Note: Domain = unbounded_imag, Range = current_model (which might be real-bounded)
+				imag_nl  = CuOp.HyperbolicPenalty(current_model, current_model, l=1.0, tau=tau)
+				imag_lin = CuOp.Softclip(current_model, current_model, l=1.0, tau=tau)
+				
+				imag_bound_op = Op.NonLinearOperator(imag_nl, imag_lin)
+				
+				# Chain: ImagBound -> [Current]
+				if not isinstance(current_op, Op.NonLinearOperator):
+					current_op = Op.NonLinearOperator(current_op, current_op)
+					
+				current_op = Op.CombNonlinearOp(imag_bound_op, current_op)
+
+		# 4. FINALIZE
+		self.precond_op = current_op
+		self.model = current_model
+		print("--- Optimization Chain Built ---")
+
+	def _compute_bound_arrays(self, keys, comp_index, transform_func, model_template, mapping_op):
+		"""
+		Computes bound arrays on the grid (Coarse or Fine).
+		Args:
+			model_template: The vector space where bounds should live (Coarse or Fine).
+			mapping_op: The operator that maps model_template -> Physical.
+		"""
+		results = []
+		
+		# Helper Solver
+		LinStop  = Stopper.BasicStopper(niter=10)
+		CGsolver = LinearSolver.LCGsolver(LinStop)
+		CGsolver.setDefaults(save_obj=False, save_res=False, save_grad=False, save_model=False)
+
+		for key in keys:
+			if key not in self.problem_par:
+				# Handle missing keys (e.g. if only vmin provided but not vmax)
+				results.append(None)
+				continue
+
+			val = self.problem_par[key]
+			target_val = transform_func(val)
+			
+			# 1. Create Physical Target (Constant value)
 			phys_target = self.phys_model.clone()
 			phys_target.zero()
-
-			# Set the specific component (0 or 1) to target_val for all bands
 			for band_vec in phys_target.vecs:
-				# Zero out everything first (already done by clone().zero())
-				# Set target component
 				band_vec.vecs[comp_index].set(target_val)
 
-			# 2. Project back to Optimization Model Space
-			model_limit = self.model.clone()
-			model_limit.zero()
-
-			if self.precond_op:
-				# If we have a preconditioner (Splines), we must invert it to find
-				# what the coarse grid values should be to achieve these bounds.
-				BoundProb = Prblm.ProblemL2Linear(model_limit, phys_target, self.precond_op)
-				
-				LinStop  = Stopper.BasicStopper(niter=self.problem_par.get('pre', {}).get('niter', 5))
-				CGsolver = LinearSolver.LCGsolver(LinStop)
-				CGsolver.setDefaults(save_obj=False, save_res=False, save_grad=False, save_model=False)
-				CGsolver.run(BoundProb, verbose=True)
-			else:
-				# If no preconditioner, the mapping is direct (identity/split)
-				# Just set the optimization model component directly
-				model_limit.vecs[comp_index].set(target_val)
-
-			# Extract the component array we care about
-			bound_arrays.append(model_limit.vecs[comp_index].getNdArray())
+			# 2. Solve for the Projection
+			# We solve: mapping_op * m_grid = phys_target
+			grid_target = model_template.clone()
+			grid_target.zero()
 			
-		return bound_arrays[0], bound_arrays[1]
+			# If mapping_op is just SplitOp (Identity grid), projection is trivial
+			if isinstance(mapping_op, CuOp.SplitOperator):
+				# Direct set (copy) since grid is same
+					# (Logic slightly complex due to split, but Solver handles it generally)
+					pass 
 
-	def _create_prox_op(self):
+			print(f"Projecting bound {key}={val}...")
+			BoundProb = Prblm.ProblemL2Linear(grid_target, phys_target, mapping_op)
+			CGsolver.run(BoundProb, verbose=False)
+			
+			bound_array = grid_target.vecs[comp_index].getNdArray().real
+			results.append(bound_array)
+
+		return results[0], results[1]
+	
+	def set_model(self, model):
 		"""
-		Creates Proximal Operator for the 4D Optimization Model.
-		Model Structure: SuperVector([4D_Slowness, 4D_Density])
+		Updates the model and triggers the Non-Linear chain update.
 		"""
-		self.proxOp = None
+		super().set_model(model)
+		if self.precond_op:
+			self.precond_op.set_background(model)
+
+	# def _create_prox_op(self):
+	# 	"""
+	# 	Creates Proximal Operator for the 4D Optimization Model.
+	# 	Model Structure: SuperVector([4D_Slowness, 4D_Density])
+	# 	"""
+	# 	self.proxOp = None
 		
-		# --- 1. Slowness Prox (Index 0) ---
-		slow_prox = None
-		if ("vmin" in self.problem_par) and ("vmax" in self.problem_par):
-			print("Computing 4D Proximal Bounds for Slowness...")
-			# Note order: vmax corresponds to LOWER bound of Slowness (1/v^2)
-			#             vmin corresponds to UPPER bound of Slowness
-			lower_s, upper_s = self._compute_bound_arrays(
-				keys=["vmax", "vmin"], 
-				comp_index=0, 
-				transform_func=lambda v: 1.0 / (v**2)
-			)
-			# Use separate arrays to ensure PyProximal doesn't hold refs to reusable buffers
-			slow_prox = ProxOperatorExplicit(
-				pp.Box(lower=lower_s.copy(), upper=upper_s.copy())
-			)
+	# 	# --- 1. Slowness Prox (Index 0) ---
+	# 	slow_prox = None
+	# 	if ("vmin" in self.problem_par) and ("vmax" in self.problem_par):
+	# 		print("Computing 4D Proximal Bounds for Slowness...")
+	# 		# Note order: vmax corresponds to LOWER bound of Slowness (1/v^2)
+	# 		#             vmin corresponds to UPPER bound of Slowness
+	# 		lower_s, upper_s = self._compute_bound_arrays(
+	# 			keys=["vmax", "vmin"], 
+	# 			comp_index=0, 
+	# 			transform_func=lambda v: -2.0 * np.log(v)
+	# 		)
+	# 		# Use separate arrays to ensure PyProximal doesn't hold refs to reusable buffers
+	# 		slow_prox = ProxOperatorExplicit(
+	# 			pp.Box(lower=lower_s.copy(), upper=upper_s.copy())
+	# 		)
 
-		# --- 2. Density Prox (Index 1) ---
-		den_prox = None
-		if ("rho_min" in self.problem_par) and ("rho_max" in self.problem_par):
-			print("Computing 4D Proximal Bounds for Density...")
-			# Density is direct: rho_min is Lower, rho_max is Upper
-			lower_d, upper_d = self._compute_bound_arrays(
-				keys=["rho_min", "rho_max"], 
-				comp_index=1, 
-				transform_func=lambda rho: rho
-			)
-			den_prox = ProxOperatorExplicit(
-				pp.Box(lower=lower_d.copy(), upper=upper_d.copy())
-			)
+	# 	# --- 2. Density Prox (Index 1) ---
+	# 	den_prox = None
+	# 	if ("rho_min" in self.problem_par) and ("rho_max" in self.problem_par):
+	# 		print("Computing 4D Proximal Bounds for Density...")
+	# 		# Density is direct: rho_min is Lower, rho_max is Upper
+	# 		lower_d, upper_d = self._compute_bound_arrays(
+	# 			keys=["rho_min", "rho_max"], 
+	# 			comp_index=1, 
+	# 			transform_func=lambda rho: np.log(rho)
+	# 		)
+	# 		den_prox = ProxOperatorExplicit(
+	# 			pp.Box(lower=lower_d.copy(), upper=upper_d.copy())
+	# 		)
 
-		# --- 3. Combine ---
-		# ProxDstack applies prox operators to components of a SuperVector
-		if slow_prox or den_prox:
-			self.proxOp = ProxDstack([slow_prox, den_prox])
+	# 	# --- 3. Combine ---
+	# 	# ProxDstack applies prox operators to components of a SuperVector
+	# 	if slow_prox or den_prox:
+	# 		self.proxOp = ProxDstack([slow_prox, den_prox])
 
 	def _get_partition_map(self, ddf, freq_col):
 		def get_partition_freq(df):
@@ -312,15 +410,35 @@ class FWIXProblem(Prblm.Problem):
 				model_paths[i] = future.result()
 				
 		return model_paths
+	
+	def _compute_regularization(self, compute_grad=True):
+		"""
+		Computes regularization objective and gradient on the Head Node.
+		Safe to run while Dask cluster is processing data.
+		"""
+		reg_obj = 0.0
+		if self.reg_op:
+			# 1. Compute Reg Objective
+			self.reg_op.forward(False, self.phys_model, self.reg_vec)
+			# Norm squared of complex vector: sum(|x|^2)
+			reg_obj = 0.5 * (self.epsilon**2) * self.reg_vec.norm()**2
+
+			if compute_grad:
+				# 2. Compute Reg Gradient
+				# Scale residual by epsilon^2 before adjoint
+				self.reg_vec.scale(self.epsilon**2)
+				
+				# Accumulate directly into phys_grad
+				self.reg_op.adjoint(True, self.phys_grad, self.reg_vec)
+				
+		return reg_obj
 
 	def objgradf(self, model):
+		
 		# 1. Forward Mapping
 		self.precond_op.forward(False, model, self.phys_model)
 		self.phys_grad.zero()
-		self.obj = 0.0
-		# TEMP HACK: Ensure no positive imaginary parts
-		mask = np.where(model[0][:].imag >=0 )
-		model[0][mask].imag = 0.0
+		self.obj_terms = [0.0,0,0]  # data, reg
 
 		# --- STEP 2: WRITE MODELS TO SCRATCH ---
 		model_tmp_dir = tempfile.mkdtemp(dir=self.scratch_dir, prefix="fwix_models_")
@@ -338,7 +456,6 @@ class FWIXProblem(Prblm.Problem):
 				freq_id = inv_map.get(part_idx)
 				if freq_id is None: continue
 
-				# KEY CHANGE: Pass the FILENAME string, not the object
 				target_path = model_paths[freq_id]
 
 				mask = self.wavelet.index.get_level_values(ftag) == freq_id
@@ -356,14 +473,17 @@ class FWIXProblem(Prblm.Problem):
 					freq_id,
 					compute_grad=True,
 					grad_tmp_dir = grad_tmp_dir,
+					obj_type = self.objective,
 				)
 				task_futures.append(task)
 
 			# --- STEP 4: COMPUTE & WRITE ---
 			freq_results = self.client.compute(task_futures, retries=self.retry_tasks)
 
+			# While cluster computes, accumulate regularization
+			self.obj_terms[1] = self._compute_regularization(compute_grad=True)
+
 			grad_files_map = defaultdict(lambda: defaultdict(list))
-			
 			for fut in as_completed(freq_results):
 				res = fut.result()
 				if res is None: continue
@@ -371,7 +491,7 @@ class FWIXProblem(Prblm.Problem):
 				# res is (f_id, f_obj, [path_comp0, path_comp1])
 				f_id, f_obj, f_paths = res
 				
-				self.obj += 0.5 * f_obj
+				self.obj_terms[0] += 0.5 * f_obj
 				
 				# Organize by component
 				for comp_idx, path in enumerate(f_paths):
@@ -433,22 +553,27 @@ class FWIXProblem(Prblm.Problem):
 			if os.path.exists(grad_tmp_dir):
 				shutil.rmtree(grad_tmp_dir)
 
-		if self.reg_op:
-			self.reg_op.forward(False, self.phys_model, self.reg_vec)
-			self.obj += 0.5 * (self.epsilon**2) * self.reg_vec.norm()**2
-			self.reg_vec.scale(self.epsilon**2)
-			self.reg_op.adjoint(True, self.phys_grad, self.reg_vec)
-
 		if self.grad_mask:
 			self.phys_grad.multiply(self.grad_mask)
 
-		self.precond_op.adjoint(False, self.grad, self.phys_grad)
+		zpow = self.problem_par.get("zpow", 0.0)
+		if zpow != 0.0:
+			# Iterate over Frequency Bands
+			for band_vec in self.phys_grad.vecs:
+				# Iterate over Components (Slow, Den)
+				for comp_vec in band_vec.vecs:
+					nz = comp_vec.getHyper().getAxis(4).n					
+					weights = np.linspace(1, nz, nz)
+					weights = np.power(weights, zpow).reshape(-1,1,1,1)
+					comp_vec[:] *= weights
+
+		self.precond_op.jac.adjoint(False, self.grad, self.phys_grad)
 
 		self.obj_updated = True
 		self.grad_updated = True
 		gc.collect()
 		
-		return self.obj, self.grad
+		return sum(self.obj_terms), self.grad
 
 	def get_obj(self, model):
 		self.set_model(model)
@@ -490,12 +615,16 @@ class FWIXProblem(Prblm.Problem):
 					self.gpu_stream_batches, 
 					self.geometry_mapping, 
 					freq_id,
-					compute_grad=False
+					compute_grad=False,
+					obj_type = self.objective
 				)
 				obj_tasks.append(worker_task)
 
 			# 5. COMPUTE & SUM
 			obj_results = self.client.compute(obj_tasks, retries=self.retry_tasks)
+
+			# While cluster computes, accumulate regularization
+			self.obj += self._compute_regularization(compute_grad=False)
 			
 			# Accumulate results as they arrive
 			for fut in as_completed(obj_results):
@@ -506,11 +635,7 @@ class FWIXProblem(Prblm.Problem):
 			if os.path.exists(tmp_dir):
 				shutil.rmtree(tmp_dir)
 
-			# 6. REGULARIZATION
-		if self.reg_op:
-			self.reg_op.forward(False, self.phys_model, self.reg_vec)
-			self.obj += 0.5 * (self.epsilon**2) * self.reg_vec.norm()**2
-
+		self.fevals += 1
 		self.obj_updated = True
 		return self.obj
 	
@@ -519,13 +644,13 @@ class FWIXProblem(Prblm.Problem):
 		Calculates dot products (res . dres) and (dres . dres) distributedly
 		without gathering the massive residual vectors.
 		"""
-		
+		self.set_model(model)
 		# Apply preconditioner if it exists:
 		# Physical Model m = P * model
 		# Physical Search Direction dm = P * dmodel
 		phys_dmodel = self.phys_model.clone()
 		self.precond_op.forward(False, model, self.phys_model)
-		self.precond_op.forward(False, dmodel, phys_dmodel)
+		self.precond_op.jac.forward(False, dmodel, phys_dmodel)
 
 		total_res_dres = 0.0
 		total_dres_dres = 0.0
@@ -565,13 +690,32 @@ class FWIXProblem(Prblm.Problem):
 					self.shots_per_gpu, 
 					self.gpu_stream_batches, 
 					self.geometry_mapping, 
-					freq_id
+					freq_id,
+					obj_type = self.objective,
 				)
 				tasks.append(task)
 
 			# 4. Compute and Sum Results
 			# results will be a list of tuples: [(res_dres, dres_dres), ...]
 			results = self.client.compute(tasks)
+
+			if self.reg_op:
+				reg_dres = self.reg_vec.clone()
+
+				# A. Regularization Residual: r_reg = D * m
+				self.reg_op.forward(False, self.phys_model, self.reg_vec)
+				
+				# B. Linearized Reg Residual: dr_reg = D * dm
+				self.reg_op.forward(False, phys_dmodel, reg_dres)
+				
+				# C. Compute Dot Products
+				# Term 1: (epsilon * r_reg) . (epsilon * dr_reg) = eps^2 * (r_reg . dr_reg)
+				reg_dot_prod = self.reg_vec.dot(reg_dres)
+				total_res_dres += (self.epsilon**2) * reg_dot_prod
+				
+				# Term 2: (epsilon * dr_reg) . (epsilon * dr_reg) = eps^2 * (dr_reg . dr_reg)
+				reg_norm_sq = reg_dres.dot(reg_dres)
+				total_dres_dres += (self.epsilon**2) * reg_norm_sq
 			
 			for fut in as_completed(results):
 				r_d, d_d = fut.result()
@@ -584,24 +728,6 @@ class FWIXProblem(Prblm.Problem):
 				shutil.rmtree(model_tmp_dir)
 			if os.path.exists(dmod_tmp_dir):
 				shutil.rmtree(dmod_tmp_dir)
-
-		# 5. Add Regularization Terms (Analytical)
-		# res_reg = epsilon * Reg * m
-		# dres_reg = epsilon * Reg * dm
-		if self.reg_op:
-			reg_dres = self.reg_vec.clone()
-
-			# Apply Reg Operator
-			self.reg_op.forward(False, self.phys_model, self.reg_vec)
-			self.reg_op.forward(False, phys_dmodel, reg_dres)
-			
-			# Scale by epsilon
-			self.reg_vec.scale(self.epsilon)
-			reg_dres.scale(self.epsilon)
-
-			# Add to dot products
-			total_res_dres += self.reg_vec.dot(reg_dres)
-			total_dres_dres += reg_dres.dot(reg_dres)
 
 		del phys_dmodel
 		gc.collect()

@@ -28,7 +28,7 @@ __global__ void ps_forward(complex_vector* __restrict__ model, complex_vector* _
   for (int batch_idx = iw0; batch_idx < total_batches; batch_idx += jw) {
     int iw = batch_idx % NW;
     int is = batch_idx / NW;
-
+    
     float sre = cuCrealf(slow_ref[iw]);
     float sim = cuCimagf(slow_ref[iw]);
     for (int iy=iy0; iy < NY; iy += jy) {

@@ -35,8 +35,10 @@ WavefieldPool.cpp
 ImagingCondition.cpp
 Scattering.cpp
 ExtendedBorn.cpp
+ExtendedMigration.cpp
 LinReflect.cpp
 StreamingExtendedBorn.cpp
+StreamingExtendedMigration.cpp
 
 python/pyCudaWEM.cpp
 )
@@ -58,8 +60,10 @@ WavefieldPool.h
 ImagingCondition.h
 Scattering.h
 ExtendedBorn.h
+ExtendedMigration.h
 LinReflect.h
 StreamingExtendedBorn.h
+StreamingExtendedMigration.h
 )
 # add_library(cpp_objects OBJECT ${CPP_SRC} ${CPP_INC})
 # set_property(TARGET cpp_objects PROPERTY CUDA_SEPARABLE_COMPILATION ON)
